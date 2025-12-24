@@ -32,22 +32,26 @@ const initDB = () => {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             stock_id INTEGER,
             po TEXT,
+            client TEXT,
             product TEXT,
             recipient TEXT,
             courier TEXT,
             tracking TEXT,
             date_sent TEXT,
             image_path TEXT, -- Link to uploaded file
+            qty INTEGER DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            deleted_at DATETIME DEFAULT NULL,
             FOREIGN KEY(stock_id) REFERENCES inventory(id)
         )
     `);
 
     // Master Data Table (Cached from parsing)
     // Refactored to English Column Names (v2.1)
+    // Master Data Table (Cached from parsing)
+    // Refactored to English Column Names (v2.1)
     db.exec(`
-        DROP TABLE IF EXISTS master_data;
-        CREATE TABLE master_data (
+        CREATE TABLE IF NOT EXISTS master_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             using_po TEXT,      -- Was yxdh
             client TEXT,        -- Was khjc
@@ -93,6 +97,17 @@ const initDB = () => {
         // Column likely exists
     }
 
+    // Migration: Add client to shipments (and backfill)
+    try {
+        db.exec("ALTER TABLE shipments ADD COLUMN client TEXT");
+        console.log("Migrated: Added client column to shipments.");
+        // Backfill existing data
+        db.exec("UPDATE shipments SET client = (SELECT client FROM inventory WHERE inventory.id = shipments.stock_id) WHERE client IS NULL");
+        console.log("Migrated: Backfilled client data for shipments.");
+    } catch (e) {
+        // Column likely exists
+    }
+
     // CLF Data Table (Cached from parsing)
     db.exec(`
         CREATE TABLE IF NOT EXISTS clf_data (
@@ -111,6 +126,49 @@ const initDB = () => {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
+
+    // Client Purpose Mapping Table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS client_purposes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_name TEXT UNIQUE NOT NULL,
+            purpose TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Seed Client Purpose Data if empty
+    const purposesCount = db.prepare('SELECT count(*) as count FROM client_purposes').get();
+    if (purposesCount.count === 0) {
+        const seedData = [
+            { client: 'BTJJ', purpose: '寄客户确认颜色' },
+            { client: 'GJ', purpose: '寄客户配PVC' },
+            { client: 'HU', purpose: '寄客户确认颜色' },
+            { client: 'HLZN', purpose: '留底' },
+            { client: 'HP', purpose: '寄客户确认颜色' },
+            { client: 'HNOS', purpose: '寄客户配PVC' },
+            { client: 'MH-TBL', purpose: '留样' },
+            { client: 'LV', purpose: '/' },
+            { client: 'YNZX', purpose: '寄客户对色' },
+            { client: 'RX', purpose: '给 HLZN' },
+            { client: 'LH', purpose: '给 HLZN' },
+            { client: 'JLF-TLT', purpose: '寄客户对色' },
+            { client: 'JLF-MH-TBL', purpose: '寄客户配PVC' },
+            { client: 'JLF-HP', purpose: '寄客户确认颜色' },
+            { client: 'JLF-BTJJ', purpose: '寄客户对色' },
+            { client: 'JLF-GJ', purpose: '寄客户配PVC' },
+            { client: 'JLF-HLZN', purpose: '留样' },
+            { client: 'JLF-LWJJ', purpose: '' },
+            { client: 'JLF-LV（利丰）', purpose: '' }
+            // Deduped list from user input
+        ];
+
+        const insert = db.prepare('INSERT OR IGNORE INTO client_purposes (client_name, purpose) VALUES (?, ?)');
+        seedData.forEach(item => {
+            insert.run(item.client, item.purpose);
+        });
+        console.log('Seeded client_purposes table.');
+    }
 
     console.log('Database tables initialized.');
 };

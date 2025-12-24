@@ -4,6 +4,7 @@ import { useInventoryStore } from '../stores/inventory'
 
 const store = useInventoryStore()
 const date = ref(new Date().toISOString().split('T')[0])
+const clientFilter = ref('')
 const imageFile = ref(null)
 
 const removeFromDraft = (index) => {
@@ -26,7 +27,8 @@ const confirmSent = async () => {
 
     // Client-side Validation: Check Stock Limits
     for (const item of store.draft) {
-        const stockItem = store.inventory.find(inv => inv.id === item.stockId)
+        // Use loose equality (==) for ID matching to handle string/number differences
+        const stockItem = store.inventory.find(inv => inv.id == item.stockId)
         if (!stockItem) continue // Should not happen
         
         const qty = item.qty || 1
@@ -82,10 +84,20 @@ const saveCourier = async (item) => {
     <div class="space-y-6">
             <!-- (Header logic omitted for brevity, unchanged) -->
 
+            <!-- Draft Header & Filter -->
+            <div class="flex justify-between items-end">
+                 <div><!-- Placeholder for potential title if needed, or keep clean --></div>
+                 <div class="w-64">
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Filter by Client</label>
+                    <input type="text" v-model="clientFilter" placeholder="Client Name..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                 </div>
+            </div>
+
             <div class="bg-white rounded-xl shadow-sm border border-slate-200">
                 <table class="w-full text-left text-sm">
                     <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold">
                         <tr>
+                            <th class="px-4 py-3">Client</th>
                             <th class="px-4 py-3">PO Info</th>
                             <th class="px-4 py-3">Recipient</th>
                             <th class="px-4 py-3 w-16">Qty</th>
@@ -95,13 +107,16 @@ const saveCourier = async (item) => {
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
-                        <tr v-for="(dItem, idx) in store.draft" :key="idx">
+                        <tr v-for="(dItem, idx) in store.draft.filter(i => !clientFilter || (i.client||'').toLowerCase().includes(clientFilter.toLowerCase()))" :key="idx">
+                            <td class="px-4 py-3">
+                                <div class="font-bold text-slate-700">{{ dItem.client }}</div>
+                            </td>
                             <td class="px-4 py-3">
                                 <div class="font-bold">{{ dItem.po }}</div>
                                 <div class="text-xs text-slate-500">{{ dItem.product }}</div>
                                 <!-- Show available stock hint -->
                                 <div class="text-[10px] text-teal-600 mt-1">
-                                    Max: {{ store.inventory.find(i => i.id === dItem.stockId)?.current_qty || '?' }}
+                                    Max: {{ store.inventory.find(i => i.id == dItem.stockId)?.current_qty ?? '?' }}
                                 </div>
                             </td>
                             <td class="px-4 py-3">
@@ -112,7 +127,7 @@ const saveCourier = async (item) => {
                                     type="number" 
                                     v-model.number="dItem.qty" 
                                     min="1" 
-                                    :max="store.inventory.find(i => i.id === dItem.stockId)?.current_qty"
+                                    :max="store.inventory.find(i => i.id == dItem.stockId)?.current_qty"
                                     class="w-full border-b border-dotted border-slate-300 focus:border-teal-500 outline-none py-1 bg-transparent font-mono text-center"
                                 >
                             </td>

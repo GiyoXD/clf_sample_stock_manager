@@ -7,12 +7,14 @@ const store = useInventoryStore()
 const router = useRouter()
 
 const selected = ref([])
-const editModal = ref({ show: false, data: { id: null, originalQty: 0, note: '' } })
+const editModal = ref({ show: false, data: { id: null, originalQty: 0, note: '', po: '', product: '', itemNo: '' } })
 
 // Search Filters
 const filters = ref({
-    date: '',
+    dateStart: '',
+    dateEnd: '',
     po: '',
+    client: '',
     product: ''
 })
 
@@ -23,16 +25,29 @@ onMounted(() => {
 const filteredStock = computed(() => {
     let result = store.currentInventory
 
-    // Filter by Date
-    if (filters.value.date) {
-        // Assuming date_in is relevant. Note: Format checking might be needed if date_in varies.
-        result = result.filter(i => (i.date_in || i.dateIn) === filters.value.date)
+    // Filter by Date Range
+    if (filters.value.dateStart) {
+        result = result.filter(i => (i.date_in || i.dateIn) >= filters.value.dateStart)
+    }
+    if (filters.value.dateEnd) {
+        result = result.filter(i => (i.date_in || i.dateIn) <= filters.value.dateEnd)
     }
 
-    // Filter by PO
+    // Filter by PO (Multi-line)
     if (filters.value.po.trim()) {
-        const query = filters.value.po.trim().toLowerCase()
-        result = result.filter(i => (i.po || '').toLowerCase().includes(query))
+        const queries = filters.value.po.split('\n').map(q => q.trim().toLowerCase()).filter(q => q)
+        if (queries.length > 0) {
+            result = result.filter(i => {
+                const po = (i.po || '').toLowerCase()
+                return queries.some(q => po.includes(q))
+            })
+        }
+    }
+
+    // Filter by Client
+    if (filters.value.client.trim()) {
+        const query = filters.value.client.trim().toLowerCase()
+        result = result.filter(i => (i.client || '').toLowerCase().includes(query))
     }
 
     // Filter by Product
@@ -58,7 +73,11 @@ const toggleSelectAll = (e) => {
 }
 
 const openEditModal = (item) => {
-    editModal.value.data = { ...item, originalQty: item.original_qty || item.originalQty }
+    editModal.value.data = { 
+        ...item, 
+        originalQty: item.original_qty || item.originalQty,
+        itemNo: item.item_no || item.itemNo // ensure mapped correctly
+    }
     editModal.value.show = true
 }
 
@@ -66,7 +85,10 @@ const saveEdit = async () => {
     try {
         await store.updateStock(editModal.value.data.id, {
             originalQty: editModal.value.data.originalQty,
-            note: editModal.value.data.note
+            note: editModal.value.data.note,
+            po: editModal.value.data.po,
+            product: editModal.value.data.product,
+            itemNo: editModal.value.data.itemNo
         })
         editModal.value.show = false
     } catch (e) {
@@ -80,6 +102,16 @@ const addToDraft = () => {
     selected.value = []
     router.push('/draft')
 }
+
+const exportToTemplate = async () => {
+    try {
+        await store.exportStockTemplate(selected.value)
+        selected.value = [] // clear selection after export?
+    } catch (e) {
+        alert('Export failed: ' + e.message)
+    }
+}
+
 const deleteItem = async (id) => {
     if (!confirm('Are you sure you want to delete this item?')) return
     try {
@@ -100,30 +132,45 @@ const deleteItem = async (id) => {
                 <div class="flex space-x-2">
                         <div v-if="selected.length > 0" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center animate-bounce">
                             <span class="mr-3 font-bold">{{ selected.length }} Selected</span>
-                            <button @click="addToDraft" class="bg-teal-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-teal-700">
+                            <button @click="addToDraft" class="bg-teal-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-teal-700 mr-2">
                                 Add to Express Draft
+                            </button>
+                             <button @click="exportToTemplate" class="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-emerald-700">
+                                <i class="fa-solid fa-file-excel mr-1"></i> Export Template
                             </button>
                         </div>
                 </div>
             </div>
 
             <!-- Filters -->
-             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+             <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                    <label class="block text-xs font-bold text-slate-400 mb-1">Date In</label>
-                    <input type="date" v-model="filters.date" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Date Range (In)</label>
+                    <div class="flex space-x-2">
+                         <input type="date" v-model="filters.dateStart" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none" placeholder="From">
+                         <input type="date" v-model="filters.dateEnd" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none" placeholder="To">
+                    </div>
                 </div>
                 <div>
-                    <label class="block text-xs font-bold text-slate-400 mb-1">PO Number</label>
-                    <input type="text" v-model="filters.po" placeholder="Search PO..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Client Name</label>
+                    <input type="text" v-model="filters.client" placeholder="Search Client..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1">PO Number (One per line)</label>
+                    <textarea 
+                        v-model="filters.po" 
+                        placeholder="Search POs..." 
+                        rows="1"
+                        class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none min-h-[38px] max-h-[120px]"
+                    ></textarea>
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">Product Name</label>
                     <input type="text" v-model="filters.product" placeholder="Search Product..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
             </div>
-            <div v-if="filters.date || filters.po || filters.product" class="mt-2 text-right">
-                <button @click="filters = { date: '', po: '', product: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
+            <div v-if="filters.dateStart || filters.dateEnd || filters.po || filters.product" class="mt-2 text-right">
+                <button @click="filters = { dateStart: '', dateEnd: '', po: '', product: '', client: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
             </div>
         </div>
 
@@ -135,6 +182,7 @@ const deleteItem = async (id) => {
                             <input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected" class="w-5 h-5 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </th>
                         <th class="px-6 py-4">Date In</th>
+                        <th class="px-6 py-4">Client</th>
                         <th class="px-6 py-4">PO / Client PO</th>
                         <th class="px-6 py-4">Product / Item</th>
                         <th class="px-6 py-4">Batch / Note</th>
@@ -150,6 +198,7 @@ const deleteItem = async (id) => {
                             <input type="checkbox" v-model="selected" :value="item.id" class="w-5 h-5 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </td>
                         <td class="px-6 py-3 whitespace-nowrap">{{ item.date_in || item.dateIn }}</td>
+                        <td class="px-6 py-3 font-medium text-slate-600">{{ item.client }}</td>
                         <td class="px-6 py-3">
                             <div class="font-bold text-teal-600">{{ item.po }}</div>
                             <div class="text-xs text-slate-400">{{ item.client_po || item.clientPO }}</div>
@@ -196,12 +245,26 @@ const deleteItem = async (id) => {
                 <h3 class="text-lg font-bold mb-4">Edit Inventory Item</h3>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-xs font-bold text-slate-500 uppercase">Original Qty</label>
-                        <input type="number" v-model.number="editModal.data.originalQty" class="w-full border p-2 rounded">
+                        <label class="block text-xs font-bold text-slate-500 uppercase">PO Number</label>
+                        <input type="text" v-model="editModal.data.po" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase">Product Name</label>
+                        <input type="text" v-model="editModal.data.product" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase">Item No / Code</label>
+                        <input type="text" v-model="editModal.data.itemNo" class="w-full border p-2 rounded">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase">Original Qty</label>
+                            <input type="number" v-model.number="editModal.data.originalQty" class="w-full border p-2 rounded">
+                        </div>
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-slate-500 uppercase">Note</label>
-                        <textarea v-model="editModal.data.note" class="w-full border p-2 rounded" rows="3"></textarea>
+                        <textarea v-model="editModal.data.note" class="w-full border p-2 rounded" rows="2"></textarea>
                     </div>
                 </div>
                 <div class="flex justify-end space-x-2 mt-6">

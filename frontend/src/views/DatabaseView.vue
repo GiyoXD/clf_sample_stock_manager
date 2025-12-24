@@ -7,12 +7,59 @@ import axios from 'axios'
 
 const store = useInventoryStore()
 const debugStore = useDebugStore()
+const masterData = ref([])
+const clfData = ref([])
+const masterFilter = ref('')
 const notification = ref({ show: false, message: '', type: 'success' })
+
+// Client Purposes Logic
+const clientPurposes = ref([])
+const showPurposeModal = ref(false)
+const purposeForm = ref({ id: null, client_name: '', purpose: '' })
+
+const fetchPurposes = async () => {
+    try {
+        const res = await axios.get('/api/client-purposes')
+        clientPurposes.value = res.data
+    } catch (e) {
+        console.error(e)
+    }
+}
+
+const savePurpose = async () => {
+    if (!purposeForm.value.client_name) return alert('Client Name is required')
+    try {
+        await axios.post('/api/client-purposes', purposeForm.value)
+        showNotification('Mapping Saved')
+        showPurposeModal.value = false
+        fetchPurposes()
+        purposeForm.value = { id: null, client_name: '', purpose: '' }
+    } catch (e) {
+        alert(e.message)
+    }
+}
+
+const deletePurpose = async (id) => {
+    if (!confirm('Delete this mapping?')) return
+    try {
+        await axios.delete(`/api/client-purposes/${id}`)
+        fetchPurposes()
+    } catch (e) {
+        alert(e.message)
+    }
+}
+
+const editPurpose = (cp) => {
+    purposeForm.value = { ...cp }
+    showPurposeModal.value = true
+}
 
 onMounted(async () => {
     debugStore.addLog('DatabaseView mounted, fetching all data...')
     try {
         await store.fetchAll()
+        masterData.value = store.masterData // Populate masterData ref
+        fetchPurposes() // Fetch purposes
         debugStore.addLog('DatabaseView: Data fetched successfully', 'success')
     } catch (err) {
         debugStore.addLog(`DatabaseView Error: ${err.message}`, 'error', err)
@@ -150,6 +197,7 @@ const confirmImportDirect = async () => {
             await store.syncMasterData(chunk, {}, i === 0);
         }
         await store.fetchAll();
+        masterData.value = store.masterData // Update masterData ref after import
         showNotification(`Success! ${totalRows} records imported.`, 'success')
     } catch (err) {
         console.error(err)
@@ -188,6 +236,7 @@ const confirmImport = async () => {
 
         // Final fetch to update UI
         await store.fetchAll();
+        masterData.value = store.masterData // Update masterData ref after import
 
         showNotification(`Success! ${totalRows} records imported.`, 'success')
         closeMappingModal()
@@ -198,18 +247,20 @@ const confirmImport = async () => {
     }
 }
 
-const exportInventory = () => {
-    const ws = XLSX.utils.json_to_sheet(store.inventory)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "Inventory")
-    XLSX.writeFile(wb, "Inventory_Export.xlsx")
+const exportInventory = async () => {
+    try {
+        await store.exportStockTemplate([]) // Pass empty array for "All"
+    } catch (e) {
+        alert('Export failed: ' + e.message)
+    }
 }
 
-const exportHistory = () => {
-    const ws = XLSX.utils.json_to_sheet(store.shipments)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "History")
-    XLSX.writeFile(wb, "History_Export.xlsx")
+const exportHistory = async () => {
+    try {
+        await store.exportHistoryTemplate([]) // Export All
+    } catch (e) {
+        alert('Export failed: ' + e.message)
+    }
 }
 
 const cleanImages = async () => {
@@ -245,6 +296,7 @@ const resetDatabase = async () => {
         resetConfirmText.value = ''
         // Refresh
         await store.fetchAll()
+        masterData.value = store.masterData // Update masterData ref after reset
     } catch (e) {
         alert('Reset failed: ' + e.message)
     }
@@ -339,6 +391,45 @@ const handleRestore = async (event) => {
             </div>
         </div>
 
+        <!-- Client Purpose Management Section -->
+        <div class="bg-white p-8 rounded-xl shadow-lg border-t-4 border-sky-500">
+             <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-slate-800 flex items-center">
+                    <i class="fa-solid fa-tags text-sky-500 mr-3"></i> 
+                    Client Purpose Mapping
+                </h2>
+                <button @click="showPurposeModal = true" class="bg-sky-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-sky-600 transition-colors">
+                    <i class="fa-solid fa-plus mr-2"></i> Add Mapping
+                </button>
+            </div>
+
+            <div class="overflow-x-auto max-h-[300px] border border-slate-200 rounded-lg">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase sticky top-0">
+                        <tr>
+                            <th class="px-6 py-3">Client Name</th>
+                            <th class="px-6 py-3">Purpose (用途)</th>
+                            <th class="px-6 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white">
+                        <tr v-for="cp in clientPurposes" :key="cp.id" class="hover:bg-slate-50">
+                            <td class="px-6 py-3 font-bold text-slate-700">{{ cp.client_name }}</td>
+                            <td class="px-6 py-3 text-slate-600">{{ cp.purpose }}</td>
+                            <td class="px-6 py-3 text-right">
+                                <button @click="editPurpose(cp)" class="text-teal-600 hover:text-teal-800 mr-3 font-medium">Edit</button>
+                                <button @click="deletePurpose(cp.id)" class="text-rose-500 hover:text-rose-700 font-medium">Delete</button>
+                            </td>
+                        </tr>
+                         <tr v-if="clientPurposes.length === 0">
+                            <td colspan="3" class="px-6 py-8 text-center text-slate-400">No mappings found.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="mt-2 text-xs text-slate-400">These mappings are used when exporting Stock List to Excel template.</p>
+        </div>
+
         <!-- Maintenance Zone -->
         <div class="bg-white p-8 rounded-xl shadow-lg border-t-4 border-indigo-500">
             <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center">
@@ -379,9 +470,12 @@ const handleRestore = async (event) => {
 
         <!-- Master Data Visualization -->
         <div class="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-            <div class="p-6 bg-slate-50 border-b border-slate-200">
-                <h2 class="text-xl font-bold text-slate-800">Master List Preview</h2>
-                <p class="text-xs text-slate-500">Showing first 100 records</p>
+            <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                <div>
+                    <h2 class="text-xl font-bold text-slate-800">Master List Preview</h2>
+                    <p class="text-xs text-slate-500">Showing first 100 matches</p>
+                </div>
+                <input v-model="masterFilter" placeholder="Filter by Client or PO..." class="border border-slate-300 rounded px-3 py-1 text-sm focus:border-teal-500 outline-none w-64 shadow-sm">
             </div>
             <div class="overflow-x-auto max-h-[500px]">
                 <table class="w-full text-left text-sm">
@@ -396,18 +490,18 @@ const handleRestore = async (event) => {
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 bg-white">
-                        <tr v-for="item in store.masterData.slice(0, 100)" :key="item.id" class="hover:bg-slate-50">
-                            <td class="px-6 py-3 font-medium text-teal-600">{{ item.using_po }}</td>
-                            <td class="px-6 py-3 text-slate-600">{{ item.client_po }}</td>
-                            <td class="px-6 py-3 text-slate-600">{{ item.client }}</td>
-                            <td class="px-6 py-3 text-slate-600">{{ item.product_name }}</td>
-                            <td class="px-6 py-3 font-mono text-slate-500">{{ item.product_code }}</td>
-                            <td class="px-6 py-3 text-xs text-slate-400 italic">{{ item.quality_note }}</td>
-                        </tr>
                         <tr v-if="store.masterData.length === 0">
                             <td colspan="6" class="px-6 py-8 text-center text-slate-400">
                                 No master data loaded. Import a file to see records here.
                             </td>
+                        </tr>
+                        <tr v-for="item in store.masterData.filter(r => !masterFilter || (r.client||'').toLowerCase().includes(masterFilter.toLowerCase()) || (r.using_po||'').toLowerCase().includes(masterFilter.toLowerCase())).slice(0, 100)" :key="item.id" class="hover:bg-slate-50">
+                            <td class="px-6 py-3 font-medium text-teal-600">{{ item.using_po }}</td>
+                            <td class="px-6 py-3">{{ item.client_po }}</td>
+                            <td class="px-6 py-3">{{ item.client }}</td>
+                            <td class="px-6 py-3">{{ item.product_name }}</td>
+                            <td class="px-6 py-3">{{ item.product_code }}</td>
+                            <td class="px-6 py-3 text-slate-500 text-xs">{{ item.quality_note }}</td>
                         </tr>
                     </tbody>
                 </table>
@@ -443,6 +537,33 @@ const handleRestore = async (event) => {
             </div>
         </div>
     </div>
+    <!-- Client Purpose Modal -->
+    <div v-if="showPurposeModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-[fade-in_0.2s_ease-out]">
+            <div class="bg-sky-500 px-6 py-4 flex justify-between items-center">
+                <h3 class="text-xl font-bold text-white">Edit Purpose Mapping</h3>
+                <button @click="showPurposeModal = false" class="text-white hover:text-sky-200">
+                    <i class="fa-solid fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Client Name</label>
+                    <input v-model="purposeForm.client_name" class="w-full border border-slate-300 rounded px-3 py-2 focus:border-sky-500 outline-none" placeholder="e.g. BTJJ">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Purpose (用途)</label>
+                    <input v-model="purposeForm.purpose" class="w-full border border-slate-300 rounded px-3 py-2 focus:border-sky-500 outline-none" placeholder="e.g. 寄客户确认颜色">
+                </div>
+                 <div class="flex justify-end space-x-2 mt-4">
+                    <button @click="showPurposeModal = false" class="px-4 py-2 text-slate-500 font-bold">Cancel</button>
+                    <button @click="savePurpose" class="px-6 py-2 bg-sky-500 text-white font-bold rounded hover:bg-sky-600">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Column Mapping Modal -->
     <div v-if="showMappingModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-[fade-in_0.2s_ease-out]">

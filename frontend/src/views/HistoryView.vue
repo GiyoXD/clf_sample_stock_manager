@@ -5,10 +5,15 @@ import { useInventoryStore } from '../stores/inventory'
 const store = useInventoryStore()
 // Filters
 const filters = ref({
-    date: '',
+    dateStart: '',
+    dateEnd: '',
     po: '',
-    product: ''
+    client: '',
+    product: '',
+    recipient: ''
 })
+
+const selected = ref([])
 
 onMounted(() => {
     store.fetchAll()
@@ -17,21 +22,41 @@ onMounted(() => {
 const filteredHistory = computed(() => {
     let result = store.shipments
 
-    // Filter by Date
-    if (filters.value.date) {
-        result = result.filter(s => s.date_sent === filters.value.date)
+    // Filter by Date Range
+    if (filters.value.dateStart) {
+        result = result.filter(s => s.date_sent >= filters.value.dateStart)
+    }
+    if (filters.value.dateEnd) {
+        result = result.filter(s => s.date_sent <= filters.value.dateEnd)
     }
 
-    // Filter by PO
+    // Filter by PO (Multi-line)
     if (filters.value.po.trim()) {
-        const query = filters.value.po.trim().toLowerCase()
-        result = result.filter(s => (s.po || '').toLowerCase().includes(query))
+        const queries = filters.value.po.split('\n').map(q => q.trim().toLowerCase()).filter(q => q)
+        if (queries.length > 0) {
+            result = result.filter(s => {
+                const po = (s.po || '').toLowerCase()
+                return queries.some(q => po.includes(q))
+            })
+        }
+    }
+
+    // Filter by Client
+    if (filters.value.client.trim()) {
+        const query = filters.value.client.trim().toLowerCase()
+        result = result.filter(s => (s.client || '').toLowerCase().includes(query))
     }
 
     // Filter by Product
     if (filters.value.product.trim()) {
         const query = filters.value.product.trim().toLowerCase()
         result = result.filter(s => (s.product || '').toLowerCase().includes(query))
+    }
+
+    // Filter by Recipient
+    if (filters.value.recipient.trim()) {
+        const query = filters.value.recipient.trim().toLowerCase()
+        result = result.filter(s => (s.recipient || '').toLowerCase().includes(query))
     }
 
     // Sort Descending Date
@@ -51,30 +76,96 @@ const revertShipment = async (shipment) => {
         alert('Error: ' + e.message)
     }
 }
+
+const isAllSelected = computed(() => {
+    return filteredHistory.value.length > 0 && selected.value.length === filteredHistory.value.length
+})
+
+const toggleSelectAll = (e) => {
+    if (e.target.checked) {
+        selected.value = filteredHistory.value.map(s => s.id)
+    } else {
+        selected.value = []
+    }
+}
+
+const revertSelected = async () => {
+    if (selected.value.length === 0) return
+    if (!confirm(`Are you sure you want to revert ${selected.value.length} shipments? Stock will be restored for all of them.`)) return
+    
+    try {
+        await store.revertShipments(selected.value)
+        selected.value = [] // Clear selection
+    } catch (e) {
+        alert('Error: ' + e.message)
+    }
+}
+
+const exportHistory = async () => {
+    try {
+        await store.exportHistoryTemplate(selected.value)
+        selected.value = []
+    } catch (e) {
+        alert('Export failed: ' + e.message)
+    }
+}
 </script>
 
 <template>
     <div class="space-y-6">
         <!-- Search Filters -->
         <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-            <h2 class="text-sm font-bold text-slate-500 uppercase mb-3">Search History</h2>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="text-sm font-bold text-slate-500 uppercase">Search History</h2>
+                <div class="flex">
+                    <button 
+                        v-if="selected.length > 0" 
+                        @click="revertSelected" 
+                        class="bg-rose-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-rose-600 transition-colors animate-pulse mr-2"
+                    >
+                        Revert {{ selected.length }} Selected
+                    </button>
+                    <button 
+                        v-if="selected.length > 0" 
+                        @click="exportHistory" 
+                        class="bg-emerald-600 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-emerald-700 transition-colors"
+                    >
+                    <i class="fa-solid fa-file-excel mr-1"></i> Export Template
+                    </button>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
                 <div>
-                    <label class="block text-xs font-bold text-slate-400 mb-1">Date Sent</label>
-                    <input type="date" v-model="filters.date" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Date Range (Sent)</label>
+                    <div class="flex space-x-2">
+                         <input type="date" v-model="filters.dateStart" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none" placeholder="From">
+                         <input type="date" v-model="filters.dateEnd" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none" placeholder="To">
+                    </div>
+                </div>
+                 <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Client Name</label>
+                    <input type="text" v-model="filters.client" placeholder="Search Client..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">PO Number</label>
-                    <input type="text" v-model="filters.po" placeholder="Search PO..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                    <input 
+                        v-model="filters.po" 
+                        placeholder="Search POs..." 
+                        class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none"
+                    >
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">Product Name</label>
                     <input type="text" v-model="filters.product" placeholder="Search Product..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Recipient</label>
+                    <input type="text" v-model="filters.recipient" placeholder="Search Recipient..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                </div>
             </div>
             <!-- Clear Filters Button if any active -->
-            <div v-if="filters.date || filters.po || filters.product" class="mt-2 text-right">
-                <button @click="filters = { date: '', po: '', product: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
+            <div v-if="filters.dateStart || filters.dateEnd || filters.po || filters.product || filters.client || filters.recipient" class="mt-2 text-right">
+                <button @click="filters = { dateStart: '', dateEnd: '', po: '', client: '', product: '', recipient: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
             </div>
         </div>
 
@@ -82,7 +173,11 @@ const revertShipment = async (shipment) => {
             <table class="w-full text-left text-sm">
                 <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider">
                     <tr>
+                        <th class="px-6 py-3 w-4">
+                            <input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected" class="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
+                        </th>
                         <th class="px-6 py-3">Date Sent</th>
+                        <th class="px-6 py-3">Client</th>
                         <th class="px-6 py-3">Reference (PO)</th>
                         <th class="px-6 py-3">Product</th>
                         <th class="px-4 py-3 text-center">Qty</th>
@@ -92,8 +187,12 @@ const revertShipment = async (shipment) => {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    <tr v-for="ship in filteredHistory" :key="ship.id">
+                    <tr v-for="ship in filteredHistory" :key="ship.id" :class="{'bg-rose-50': selected.includes(ship.id)}">
+                        <td class="px-6 py-3">
+                            <input type="checkbox" v-model="selected" :value="ship.id" class="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
+                        </td>
                         <td class="px-6 py-3 whitespace-nowrap text-slate-500">{{ ship.date_sent }}</td>
+                        <td class="px-6 py-3 font-medium text-slate-600">{{ ship.client }}</td>
                         <td class="px-6 py-3 font-bold text-slate-700">{{ ship.po }}</td>
                         <td class="px-6 py-3 text-xs text-slate-500">{{ ship.product }}</td>
                         <td class="px-4 py-3 text-center font-bold text-teal-600">{{ ship.qty > 1 ? ship.qty : 1 }}</td>

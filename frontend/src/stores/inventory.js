@@ -216,6 +216,17 @@ export const useInventoryStore = defineStore('inventory', {
             }
         },
 
+        async revertShipments(ids) {
+            try {
+                // Execute all deletes concurrently
+                await Promise.all(ids.map(id => axios.delete(`/api/shipments/${id}`)));
+                await this.fetchAll();
+            } catch (err) {
+                this.error = err.message;
+                throw err;
+            }
+        },
+
         // Trash Actions
         async fetchTrash() {
             try {
@@ -280,6 +291,39 @@ export const useInventoryStore = defineStore('inventory', {
                     headers: { 'Content-Type': 'multipart/form-data' }
                 });
                 return res.data.path;
+            } catch (err) {
+                this.error = err.message;
+                throw err;
+            }
+        },
+
+        async exportStockTemplate(ids) {
+            try {
+                const res = await axios.post('/api/export/stock-template', { ids }, { responseType: 'blob' });
+                // Create download link
+                const url = window.URL.createObjectURL(new Blob([res.data]));
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', 'Stock_Export.xlsx');
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+            } catch (err) {
+                this.error = err.message;
+                throw err;
+            }
+        },
+
+        async exportHistoryTemplate(ids) {
+            try {
+                const res = await axios.post('/api/export/history-template', { ids }, { responseType: 'blob' });
+                const url = window.URL.createObjectURL(new Blob([res.data]));
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', 'History_Export.xlsx');
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
             } catch (err) {
                 this.error = err.message;
                 throw err;

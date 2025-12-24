@@ -72,7 +72,7 @@ app.post('/api/inventory', (req, res) => {
 app.put('/api/inventory/:id', (req, res) => {
     try {
         const { id } = req.params;
-        const { originalQty, note } = req.body;
+        const { originalQty, note, po, product, itemNo } = req.body;
         const row = db.prepare('SELECT original_qty, current_qty FROM inventory WHERE id = ?').get(id);
         if (!row) return res.status(404).json({ error: 'Item not found' });
 
@@ -81,10 +81,11 @@ app.put('/api/inventory/:id', (req, res) => {
 
         const stmt = db.prepare(`
             UPDATE inventory 
-            SET original_qty = ?, current_qty = ?, note = ?
+            SET original_qty = ?, current_qty = ?, note = ?, po = ?, product = ?, item_no = ?
             WHERE id = ?
         `);
-        stmt.run(originalQty, newCurrent, note, id);
+        // If PO is empty, use empty string to satisfy NOT NULL
+        stmt.run(originalQty, newCurrent, note, po || "", product, itemNo, id);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -167,8 +168,8 @@ app.post('/api/shipments', (req, res) => {
     const { items, dateSent, imagePath } = req.body; // items has .qty now
 
     const insertShipment = db.prepare(`
-        INSERT INTO shipments (stock_id, po, product, recipient, courier, tracking, date_sent, image_path, qty)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO shipments (stock_id, po, client, product, recipient, courier, tracking, date_sent, image_path, qty)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Use >= qty, and deduct qty
@@ -193,6 +194,7 @@ app.post('/api/shipments', (req, res) => {
             insertShipment.run(
                 item.stockId,
                 item.po,
+                item.client,
                 item.product,
                 item.recipient,
                 item.courier,
@@ -223,8 +225,8 @@ app.delete('/api/shipments/:id', (req, res) => {
         const qty = shipment.qty || 1;
         db.prepare('UPDATE inventory SET current_qty = current_qty + ? WHERE id = ?').run(qty, shipment.stock_id);
 
-        // Mark as Deleted
-        db.prepare("UPDATE shipments SET deleted_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+        // Hard Delete (Undo) - User request: don't put in trash
+        db.prepare("DELETE FROM shipments WHERE id = ?").run(id);
 
         res.json({ success: true });
     } catch (err) {
@@ -426,6 +428,212 @@ app.get('/api/couriers', (req, res) => {
         const rows = db.prepare('SELECT * FROM couriers ORDER BY name ASC').all();
         res.json(rows);
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- CLIENT PURPOSES API ---
+app.get('/api/client-purposes', (req, res) => {
+    try {
+        const rows = db.prepare('SELECT * FROM client_purposes ORDER BY client_name ASC').all();
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/client-purposes', (req, res) => {
+    try {
+        const { client_name, purpose } = req.body;
+        if (!client_name) return res.status(400).json({ error: 'Client name is required' });
+
+        const stmt = db.prepare(`
+            INSERT INTO client_purposes (client_name, purpose) 
+            VALUES (?, ?)
+            ON CONFLICT(client_name) DO UPDATE SET purpose = excluded.purpose
+        `);
+        stmt.run(client_name, purpose);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/client-purposes/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        db.prepare('DELETE FROM client_purposes WHERE id = ?').run(id);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// --- EXCEL EXPORT API ---
+const ExcelJS = require('exceljs');
+app.post('/api/export/stock-template', async (req, res) => {
+    try {
+        const { ids } = req.body;
+
+        let items;
+        if (!ids || ids.length === 0) {
+            items = db.prepare('SELECT * FROM inventory WHERE deleted_at IS NULL ORDER BY date_in DESC').all();
+        } else {
+            const placeholders = ids.map(() => '?').join(',');
+            items = db.prepare(`SELECT * FROM inventory WHERE id IN (${placeholders}) ORDER BY date_in DESC`).all(...ids);
+        }
+
+        // Fetch Purpose Map
+        const purposeRows = db.prepare('SELECT client_name, purpose FROM client_purposes').all();
+        const purposeMap = {};
+        purposeRows.forEach(row => {
+            purposeMap[row.client_name.toLowerCase()] = row.purpose;
+        });
+
+        // Create Workbook
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Stock List');
+
+        // Headers
+        worksheet.columns = [
+            { header: '日期', key: 'date', width: 15 },
+            { header: '生产单号', key: 'po', width: 20 },
+            { header: '生产名称', key: 'product', width: 30 },
+            { header: '客户', key: 'client', width: 20 },
+            { header: '取样大小', key: 'size', width: 15 },
+            { header: '数量', key: 'qty', width: 10 },
+            { header: '存货', key: 'current_qty', width: 10 },
+            { header: '颜色风格手感确认', key: 'note', width: 30 },
+            { header: '用途', key: 'purpose', width: 25 }
+        ];
+
+        // Style Headers
+        worksheet.getRow(1).font = { bold: true, size: 12 };
+        worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getRow(1).height = 25;
+
+        // Add Data
+        items.forEach(item => {
+            // Determine Purpose
+            const clientKey = (item.client || '').trim().toLowerCase();
+            const purpose = purposeMap[clientKey] || '';
+
+            worksheet.addRow({
+                date: item.date_in,
+                po: item.po,
+                product: `${item.product || ''} ${item.item_no || ''}`.trim(),
+                client: item.client,
+                size: item.size,
+                qty: item.original_qty,
+                current_qty: item.current_qty,
+                note: item.note,
+                purpose: purpose
+            });
+        });
+
+        // Apply Borders and Center Alignment to All Data Cells
+        worksheet.eachRow((row, rowNumber) => {
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
+                cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+            });
+            if (rowNumber > 1) {
+                row.height = 20;
+            }
+        });
+
+        // Response
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=Stock_Export.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (err) {
+        console.error('Export Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/export/history-template', async (req, res) => {
+    try {
+        const { ids } = req.body;
+
+        let items;
+        if (!ids || ids.length === 0) {
+            // Export All
+            items = db.prepare('SELECT * FROM shipments WHERE deleted_at IS NULL ORDER BY date_sent DESC').all();
+        } else {
+            // Export Selected
+            const placeholders = ids.map(() => '?').join(',');
+            items = db.prepare(`SELECT * FROM shipments WHERE id IN (${placeholders}) ORDER BY date_sent DESC`).all(...ids);
+        }
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('History List');
+
+        // Headers
+        worksheet.columns = [
+            { header: '日期', key: 'date', width: 15 },
+            { header: '客户', key: 'client', width: 20 },
+            { header: '生产单号', key: 'po', width: 20 },
+            { header: '生产名称', key: 'product', width: 30 },
+            { header: '数量', key: 'qty', width: 10 },
+            { header: '收件人', key: 'recipient', width: 20 },
+            { header: '快递', key: 'courier', width: 15 },
+            { header: '单号', key: 'tracking', width: 20 }
+        ];
+
+        // Style Headers
+        const headerRow = worksheet.getRow(1);
+        headerRow.font = { bold: true, size: 12 };
+        headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+        headerRow.height = 25;
+
+        // Add Data
+        items.forEach(item => {
+            worksheet.addRow({
+                date: item.date_sent,
+                client: item.client,
+                po: item.po,
+                product: item.product,
+                qty: item.qty,
+                recipient: item.recipient,
+                courier: item.courier,
+                tracking: item.tracking
+            });
+        });
+
+        // Apply Borders and Alignment
+        worksheet.eachRow((row, rowNumber) => {
+            row.eachCell((cell) => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
+                cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+            });
+            if (rowNumber > 1) {
+                row.height = 20;
+            }
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=History_Export.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (err) {
+        console.error('History Export Error:', err);
         res.status(500).json({ error: err.message });
     }
 });

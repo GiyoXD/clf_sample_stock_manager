@@ -1,11 +1,37 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 
 const store = useInventoryStore()
 const activeTab = ref('stock') // 'stock' or 'history'
+
+const setActiveTab = (tab) => {
+    activeTab.value = tab
+}
+
 const trashItems = ref({ inventory: [], shipments: [] })
 const loading = ref(false)
+const filter = ref('')
+
+const filteredInventory = computed(() => {
+    if (!filter.value) return trashItems.value.inventory
+    const q = filter.value.toLowerCase()
+    return trashItems.value.inventory.filter(i => 
+        (i.po||'').toLowerCase().includes(q) || 
+        (i.client||'').toLowerCase().includes(q) || 
+        (i.product||'').toLowerCase().includes(q)
+    )
+})
+
+const filteredShipments = computed(() => {
+    if (!filter.value) return trashItems.value.shipments
+    const q = filter.value.toLowerCase()
+    return trashItems.value.shipments.filter(i => 
+        (i.po||'').toLowerCase().includes(q) || 
+        (i.client||'').toLowerCase().includes(q) ||
+        (i.product||'').toLowerCase().includes(q)
+    )
+})
 
 const fetchTrash = async () => {
     loading.value = true
@@ -58,20 +84,24 @@ const deletePermanently = async (id, type) => {
             <h2 class="text-2xl font-bold text-slate-800">Recycle Bin</h2>
             <div class="flex bg-slate-100 p-1 rounded-lg">
                 <button 
-                    @click="activeTab = 'stock'"
+                    @click="setActiveTab('stock')"
                     class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
                     :class="activeTab === 'stock' ? 'bg-white text-teal-600 shadow' : 'text-slate-500 hover:text-slate-700'"
                 >
                     Deleted Stock
                 </button>
                 <button 
-                    @click="activeTab = 'history'"
+                    @click="setActiveTab('history')"
                     class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
                     :class="activeTab === 'history' ? 'bg-white text-teal-600 shadow' : 'text-slate-500 hover:text-slate-700'"
                 >
                     Deleted History
                 </button>
             </div>
+        </div>
+
+        <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <input v-model="filter" placeholder="Search PO, Client, or Product..." class="w-full border border-slate-300 rounded px-2 py-2 text-sm focus:border-teal-500 outline-none">
         </div>
 
         <div v-if="loading" class="text-center py-10 text-slate-400">Loading...</div>
@@ -82,6 +112,7 @@ const deletePermanently = async (id, type) => {
                 <thead class="bg-slate-50 text-slate-500 uppercase font-semibold">
                     <tr>
                         <th class="px-6 py-4">Deleted At</th>
+                        <th class="px-6 py-4">Client</th>
                         <th class="px-6 py-4">PO</th>
                         <th class="px-6 py-4">Product</th>
                         <th class="px-6 py-4">Details</th>
@@ -89,8 +120,9 @@ const deletePermanently = async (id, type) => {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    <tr v-for="item in trashItems.inventory" :key="item.id">
+                    <tr v-for="item in filteredInventory" :key="item.id">
                         <td class="px-6 py-3 text-slate-500">{{ item.deleted_at }}</td>
+                        <td class="px-6 py-3 font-medium text-slate-600">{{ item.client }}</td>
                         <td class="px-6 py-3 font-medium">{{ item.po }}</td>
                         <td class="px-6 py-3">{{ item.product }} - {{ item.item_no }} ({{ item.size }})</td>
                         <td class="px-6 py-3 text-xs text-slate-400">Qty: {{ item.current_qty }} | Note: {{ item.note }}</td>
@@ -113,15 +145,17 @@ const deletePermanently = async (id, type) => {
                     <tr>
                         <th class="px-6 py-4">Deleted At</th>
                         <th class="px-6 py-4">Date Sent</th>
+                        <th class="px-6 py-4">Client</th>
                         <th class="px-6 py-4">PO</th>
                         <th class="px-6 py-4">Recipient</th>
                         <th class="px-6 py-4 text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    <tr v-for="item in trashItems.shipments" :key="item.id">
+                    <tr v-for="item in filteredShipments" :key="item.id">
                         <td class="px-6 py-3 text-slate-500">{{ item.deleted_at }}</td>
                         <td class="px-6 py-3">{{ item.date_sent }}</td>
+                        <td class="px-6 py-3 font-medium text-slate-600">{{ item.client }}</td>
                         <td class="px-6 py-3 font-medium">{{ item.po }}</td>
                         <td class="px-6 py-3">
                             <div>{{ item.recipient }}</div>
