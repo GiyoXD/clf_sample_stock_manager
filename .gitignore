@@ -40,3 +40,6 @@ backend/uploads/
 # Build output
 dist/
 build/
+
+# Backups
+backups/

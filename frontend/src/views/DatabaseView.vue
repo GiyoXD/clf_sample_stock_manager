@@ -245,11 +245,50 @@ const resetDatabase = async () => {
         resetConfirmText.value = ''
         // Refresh
         await store.fetchAll()
-        // Force reload to clear any local state issues
-        window.location.reload()
     } catch (e) {
         alert('Reset failed: ' + e.message)
     }
+}
+
+const triggerBackup = async () => {
+    try {
+        const res = await axios.post('/api/backup')
+        alert(`Success! ${res.data.message}`)
+    } catch (e) {
+        alert('Backup failed: ' + e.message)
+    }
+}
+
+const restoreInput = ref(null)
+
+const triggerRestore = () => {
+    restoreInput.value.click()
+}
+
+const handleRestore = async (event) => {
+    const file = event.target.files[0]
+    if (!file) return
+    
+    // Safety Check
+    if (!confirm('WARNING: This will replace your ENTIRE database with the selected backup.\n\nAll current data will be LOST.\n\nAre you sure you want to continue?')) {
+        event.target.value = ''
+        return
+    }
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+        const res = await axios.post('/api/restore', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        alert('Restore Successful! The application will now reload.')
+        window.location.reload()
+    } catch (err) {
+        console.error(err)
+        alert('Restore Failed: ' + (err.response?.data?.error || err.message))
+    }
+    event.target.value = ''
 }
 </script>
 
@@ -297,6 +336,26 @@ const resetDatabase = async () => {
                     <i class="fa-solid fa-clock-rotate-left text-3xl mb-2 text-indigo-600"></i>
                     <span>Export History</span>
                 </button>
+            </div>
+        </div>
+
+        <!-- Maintenance Zone -->
+        <div class="bg-white p-8 rounded-xl shadow-lg border-t-4 border-indigo-500">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center">
+                <i class="fa-solid fa-screwdriver-wrench text-indigo-500 mr-3"></i> 
+                Maintenance
+            </h2>
+            <div class="flex space-x-4">
+                <button @click="triggerBackup" class="flex-1 bg-white border-2 border-slate-200 hover:border-indigo-500 hover:text-indigo-600 text-slate-600 font-bold py-4 rounded-xl transition-all flex flex-col items-center justify-center">
+                    <i class="fa-solid fa-download text-3xl mb-2 text-indigo-500"></i>
+                    <span>Backup Database Now</span>
+                </button>
+                <button @click="triggerRestore" class="flex-1 bg-white border-2 border-slate-200 hover:border-teal-500 hover:text-teal-600 text-slate-600 font-bold py-4 rounded-xl transition-all flex flex-col items-center justify-center">
+                    <i class="fa-solid fa-upload text-3xl mb-2 text-teal-500"></i>
+                    <span>Restore Backup</span>
+                </button>
+                <!-- Hidden Restore Input -->
+                <input ref="restoreInput" type="file" accept=".sqlite" class="hidden" @change="handleRestore">
             </div>
         </div>
 

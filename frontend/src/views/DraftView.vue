@@ -153,13 +153,19 @@ const saveCourier = async (item) => {
                 </div>
             </div>
 
-            <div class="flex justify-end space-x-4 pt-4" v-if="store.draft.length > 0">
-                <button @click="printLabels" class="bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-lg shadow-md font-medium">
-                    <i class="fa-solid fa-print mr-2"></i> Print Labels
-                </button>
-                <button @click="confirmSent" class="bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-lg shadow-md font-bold">
-                    <i class="fa-solid fa-check mr-2"></i> Confirm Sent
-                </button>
+            <div class="flex items-center justify-between pt-4" v-if="store.draft.length > 0">
+                <div class="flex items-center space-x-2">
+                    <label class="text-sm font-medium text-slate-600"><i class="fa-solid fa-paperclip mr-1"></i> Attach Proof (Image):</label>
+                    <input type="file" @change="handleFileChange" accept="image/*" class="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100 cursor-pointer">
+                </div>
+                <div class="flex space-x-4">
+                    <button @click="printLabels" class="bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-lg shadow-md font-medium">
+                        <i class="fa-solid fa-print mr-2"></i> Print Labels
+                    </button>
+                    <button @click="confirmSent" class="bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-lg shadow-md font-bold">
+                        <i class="fa-solid fa-check mr-2"></i> Confirm Sent
+                    </button>
+                </div>
             </div>
 
             <!-- Hidden Print Area -->

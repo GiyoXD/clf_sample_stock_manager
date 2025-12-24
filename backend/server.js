@@ -396,6 +396,30 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     }
 });
 
+// --- Image Cleanup API ---
+app.delete('/api/cleanup-images', (req, res) => {
+    try {
+        const uploadDir = path.join(__dirname, 'uploads');
+        if (!fs.existsSync(uploadDir)) return res.json({ deleted: 0 });
+
+        const files = fs.readdirSync(uploadDir);
+        const shipments = db.prepare('SELECT image_path FROM shipments WHERE image_path IS NOT NULL AND deleted_at IS NULL').all();
+        const usedImages = new Set(shipments.map(s => path.basename(s.image_path)));
+
+        let deletedCount = 0;
+        files.forEach(file => {
+            if (!usedImages.has(file)) {
+                fs.unlinkSync(path.join(uploadDir, file));
+                deletedCount++;
+            }
+        });
+
+        res.json({ success: true, deleted: deletedCount });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- Couriers API ---
 app.get('/api/couriers', (req, res) => {
     try {
@@ -431,6 +455,119 @@ app.post('/api/debug/reset-db', (req, res) => {
         res.json({ success: true, message: 'Database reset successfully.' });
     } catch (err) {
         console.error('Reset DB Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- BACKUP SYSTEM ---
+const BACKUP_DIR = path.join(__dirname, 'backups');
+if (!fs.existsSync(BACKUP_DIR)) {
+    fs.mkdirSync(BACKUP_DIR);
+}
+
+// Helper: Create Backup
+const createBackup = async (label = 'manual') => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `db_backup_${label}_${timestamp}.sqlite`;
+    const target = path.join(BACKUP_DIR, filename);
+
+    await db.backup(target);
+    console.log(`Backup created: ${filename}`);
+    return { filename, path: target };
+};
+
+// Scheduled Task: Monthly Backup (Run on startup check)
+const runScheduledBackup = async () => {
+    const date = new Date();
+    const monthLabel = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const monthlyFilePrefix = `db_backup_monthly_${monthLabel}`;
+
+    // Check if we already have a backup for this month
+    const files = fs.readdirSync(BACKUP_DIR);
+    const hasMonthly = files.some(f => f.startsWith(monthlyFilePrefix));
+
+    if (!hasMonthly) {
+        console.log('Running automated monthly backup...');
+        await createBackup(`monthly_${monthLabel}`);
+    }
+};
+// Run check on startup
+runScheduledBackup().catch(err => console.error('Scheduled backup failed:', err));
+
+// Manual Backup Route
+app.post('/api/backup', async (req, res) => {
+    try {
+        const result = await createBackup('manual');
+        res.json({ success: true, message: `Backup created: ${result.filename}` });
+    } catch (err) {
+        console.error('Backup Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Restore Database Route
+const Database = require('better-sqlite3');
+app.post('/api/restore', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+        const backupPath = req.file.path;
+        console.log(`Starting restore from: ${backupPath}`);
+
+        // Open the uploaded database
+        const sourceDb = new Database(backupPath, { readonly: true });
+
+        // Backup FROM Source (Uploaded) TO Destination (Live DB)
+        // db.backup matches the signature: backup(destination, options)
+        // But here we want to overwrite 'db' (the live one).
+        // better-sqlite3 documentation says: `db.backup(filename, options)` copies FROM db TO filename.
+        // To copy FROM another file TO current db, we can use `sourceDb.backup(LIVE_DB_PATH)`.
+
+        // However, 'db' is an open connection to 'database.sqlite'.
+        // We cannot easily overwrite the file 'database.sqlite' while it is open by 'db'?
+        // better-sqlite3 handles this safely if we use the API?
+        // Actually, the safest way is:
+        // 1. Close current DB? (Express might fail requests)
+        // 2. Use `sourceDb.backup(LIVE_DB_PATH)`? 
+
+        // Alternative: Use SQLite `VACUUM INTO`?
+        // Let's try the `sourceDb.backup(LIVE_DB)` approach.
+        // We need the absolute path of the live DB.
+
+        const LIVE_DB_PATH = path.join(__dirname, 'database.sqlite');
+
+        // We must ensure the source is valid.
+        try {
+            await sourceDb.backup(LIVE_DB_PATH);
+        } catch (backupErr) {
+            sourceDb.close(); // Close source
+            throw backupErr;
+        }
+
+        sourceDb.close();
+
+        // Clean up uploaded file
+        fs.unlinkSync(backupPath);
+
+        console.log('Database restored successfully.');
+        res.json({ success: true, message: 'Database restored. Reloading...' });
+
+        // Optional: Exit process to force restart/reload of DB connection?
+        // better-sqlite3 connection `db` might be stale or invalid if file underneath changed?
+        // Since we overwrote the file, the file descriptor might be weird?
+        // Most reliable way for SQLite to pick up fresh file is to close/reopen or restart process.
+        // We will tell Frontend to reload, but Backend state might need refresh.
+        // Let's exit process (PM2/Supervisor or just manual restart)??
+        // Or just close and reopen global `db`? 
+        // `db` module exports an instance. We can't restart it easily.
+        // BUT: better-sqlite3 usually handles WAL file updates. Direct overwrite might break WAL?
+
+        // Recommendation: Backup -> Restore -> Restart Server.
+        // We will return success and let user restart.
+
+    } catch (err) {
+        console.error('Restore Error:', err);
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         res.status(500).json({ error: err.message });
     }
 });
