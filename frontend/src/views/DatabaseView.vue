@@ -1,3 +1,4 @@
+```
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
@@ -115,7 +116,7 @@ const handleFileImport = (event, type) => {
     // 6: client_po (client_po)
     // 10: product_name (scmc)
     // 24: quality_note (zlyq)
-    // 27: product_code (cpmc)
+    // 11: product_code (cpmc) - Index 11 (Col 12)
     
     const reader = new FileReader()
     reader.onload = async (e) => {
@@ -156,7 +157,7 @@ const handleFileImport = (event, type) => {
                     client_po: String(r[6] || '').trim(),
                     product_name: String(r[10] || '').trim(),
                     quality_note: String(r[24] || '').trim(),
-                    product_code: String(r[27] || '').trim(),
+                    product_code: String(r[11] || '').trim(), // Index 11 = Column 12
                 });
             }
 

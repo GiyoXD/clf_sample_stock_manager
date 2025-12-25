@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 
 const store = useInventoryStore()
@@ -78,6 +78,31 @@ const saveCourier = async (item) => {
         alert('Failed to save courier: ' + e.message)
     }
 }
+
+// Bulk Logic
+const selected = ref([])
+const isAllSelected = computed(() => {
+    return store.draft.length > 0 && selected.value.length === store.draft.length
+})
+
+const toggleSelectAll = (checked) => {
+    if (checked) {
+        selected.value = store.draft.map((_, idx) => idx)
+    } else {
+        selected.value = []
+    }
+}
+
+const batchRemove = () => {
+    if (!confirm(`Remove ${selected.value.length} items from draft?`)) return
+   
+    // Sort indices descending to avoid shifting issues when splicing
+    const indices = [...selected.value].sort((a, b) => b - a)
+    for (const idx of indices) {
+        store.removeFromDraft(idx)
+    }
+    selected.value = []
+}
 </script>
 
 <template>
@@ -86,7 +111,15 @@ const saveCourier = async (item) => {
 
             <!-- Draft Header & Filter -->
             <div class="flex justify-between items-end">
-                 <div><!-- Placeholder for potential title if needed, or keep clean --></div>
+                 <div class="flex items-center space-x-2">
+                    <button 
+                        v-if="selected.length > 0" 
+                        @click="batchRemove" 
+                        class="bg-rose-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-rose-600 transition-colors animate-pulse"
+                    >
+                        <i class="fa-solid fa-trash mr-1"></i> Remove {{ selected.length }}
+                    </button>
+                 </div>
                  <div class="w-64">
                     <label class="block text-xs font-bold text-slate-400 mb-1">Filter by Client</label>
                     <input type="text" v-model="clientFilter" placeholder="Client Name..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
@@ -97,6 +130,9 @@ const saveCourier = async (item) => {
                 <table class="w-full text-left text-sm">
                     <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold">
                         <tr>
+                            <th class="px-4 py-3 w-10">
+                                <input type="checkbox" :checked="isAllSelected" @change="e => toggleSelectAll(e.target.checked)" class="rounded text-indigo-600 focus:ring-indigo-500">
+                            </th>
                             <th class="px-4 py-3">Client</th>
                             <th class="px-4 py-3">PO Info</th>
                             <th class="px-4 py-3">Recipient</th>
@@ -108,6 +144,9 @@ const saveCourier = async (item) => {
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         <tr v-for="(dItem, idx) in store.draft.filter(i => !clientFilter || (i.client||'').toLowerCase().includes(clientFilter.toLowerCase()))" :key="idx">
+                            <td class="px-4 py-3">
+                                <input type="checkbox" v-model="selected" :value="idx" class="rounded text-indigo-600 focus:ring-indigo-500">
+                            </td>
                             <td class="px-4 py-3">
                                 <div class="font-bold text-slate-700">{{ dItem.client }}</div>
                             </td>

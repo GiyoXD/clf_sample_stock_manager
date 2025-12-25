@@ -184,7 +184,9 @@ export const useInventoryStore = defineStore('inventory', {
                     recipient: '',
                     courier: 'SF',
                     tracking: '',
-                    qty: 1
+                    qty: 1, // Default to 1 to send
+                    maxQty: item.current_qty || item.currentQty || 0, // Store max available
+                    size: item.size || ''
                 });
             });
         },
@@ -199,6 +201,17 @@ export const useInventoryStore = defineStore('inventory', {
                 // Clear draft
                 this.draft = [];
                 // Refresh Data
+                await this.fetchAll();
+            } catch (err) {
+                this.error = err.message;
+                throw err;
+            }
+        },
+
+
+        async deleteShipment(id) {
+            try {
+                await axios.post(`/api/shipments/trash/${id}`);
                 await this.fetchAll();
             } catch (err) {
                 this.error = err.message;

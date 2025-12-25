@@ -1,19 +1,22 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
+import ImportModal from '../components/ImportModal.vue'
 
 const store = useInventoryStore()
 // Filters
+
+
+const selected = ref([])
 const filters = ref({
     dateStart: '',
     dateEnd: '',
-    po: '',
     client: '',
+    po: '',
     product: '',
-    recipient: ''
+    recipient: '',
+    tracking: ''
 })
-
-const selected = ref([])
 
 onMounted(() => {
     store.fetchAll()
@@ -59,6 +62,17 @@ const filteredHistory = computed(() => {
         result = result.filter(s => (s.recipient || '').toLowerCase().includes(query))
     }
 
+    // Filter by Tracking
+    if (filters.value.tracking.trim()) {
+        const query = filters.value.tracking.trim().toLowerCase()
+        // Check both courier and tracking number and Recipient
+        result = result.filter(s => 
+            (s.tracking || '').toLowerCase().includes(query) ||
+            (s.courier || '').toLowerCase().includes(query) ||
+            (s.recipient || '').toLowerCase().includes(query)
+        )
+    }
+
     // Sort Descending Date
     return [...result].sort((a,b) => new Date(b.date_sent) - new Date(a.date_sent))
 })
@@ -101,6 +115,19 @@ const revertSelected = async () => {
     }
 }
 
+const batchDelete = async () => {
+    if (!confirm(`Move ${selected.value.length} History items to Trash?`)) return
+    try {
+        for (const id of selected.value) {
+            await store.deleteShipment(id)
+        }
+        selected.value = []
+        store.fetchAll()
+    } catch (e) {
+        alert('Batch delete failed: ' + e.message)
+    }
+}
+
 const exportHistory = async () => {
     try {
         await store.exportHistoryTemplate(selected.value)
@@ -109,21 +136,46 @@ const exportHistory = async () => {
         alert('Export failed: ' + e.message)
     }
 }
+
+// Import Modal
+const showImportModal = ref(false)
+const openImport = () => {
+    showImportModal.value = true
+}
+const handleImportSuccess = () => {
+    store.fetchAll()
+}
 </script>
 
 <template>
     <div class="space-y-6">
+        <ImportModal 
+            :show="showImportModal" 
+            target="history" 
+            @close="showImportModal = false" 
+            @refresh="handleImportSuccess" 
+        />
         <!-- Search Filters -->
         <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
             <div class="flex justify-between items-center mb-3">
                 <h2 class="text-sm font-bold text-slate-500 uppercase">Search History</h2>
                 <div class="flex">
+                     <button @click="openImport" class="bg-indigo-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-indigo-700 mr-2">
+                        <i class="fa-solid fa-file-import mr-1"></i> Import
+                    </button>
+                    <button 
+                        v-if="selected.length > 0" 
+                        @click="batchDelete" 
+                        class="bg-rose-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-rose-600 transition-colors animate-pulse mr-2"
+                    >
+                        <i class="fa-solid fa-trash mr-1"></i> Delete {{ selected.length }}
+                    </button>
                     <button 
                         v-if="selected.length > 0" 
                         @click="revertSelected" 
-                        class="bg-rose-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-rose-600 transition-colors animate-pulse mr-2"
+                        class="bg-amber-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-amber-600 transition-colors mr-2"
                     >
-                        Revert {{ selected.length }} Selected
+                        <i class="fa-solid fa-rotate-left mr-1"></i> Revert {{ selected.length }}
                     </button>
                     <button 
                         v-if="selected.length > 0" 
@@ -159,8 +211,8 @@ const exportHistory = async () => {
                     <input type="text" v-model="filters.product" placeholder="Search Product..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
                 <div>
-                    <label class="block text-xs font-bold text-slate-400 mb-1">Recipient</label>
-                    <input type="text" v-model="filters.recipient" placeholder="Search Recipient..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                     <label class="block text-xs font-bold text-slate-400 mb-1">Recipient / Tracking</label>
+                    <input type="text" v-model="filters.tracking" placeholder="Search Recipient or Tracking..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
             </div>
             <!-- Clear Filters Button if any active -->
@@ -180,6 +232,7 @@ const exportHistory = async () => {
                         <th class="px-6 py-3">Client</th>
                         <th class="px-6 py-3">Reference (PO)</th>
                         <th class="px-6 py-3">Product</th>
+                        <th class="px-6 py-3">Size</th>
                         <th class="px-4 py-3 text-center">Qty</th>
                         <th class="px-6 py-3">Recipient</th>
                         <th class="px-6 py-3">Logistics</th>
@@ -195,6 +248,7 @@ const exportHistory = async () => {
                         <td class="px-6 py-3 font-medium text-slate-600">{{ ship.client }}</td>
                         <td class="px-6 py-3 font-bold text-slate-700">{{ ship.po }}</td>
                         <td class="px-6 py-3 text-xs text-slate-500">{{ ship.product }}</td>
+                        <td class="px-6 py-3 text-xs text-slate-500">{{ ship.size }}</td>
                         <td class="px-4 py-3 text-center font-bold text-teal-600">{{ ship.qty > 1 ? ship.qty : 1 }}</td>
                         <td class="px-6 py-3">{{ ship.recipient }}</td>
                         <td class="px-6 py-3">

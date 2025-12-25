@@ -8,6 +8,10 @@ import { useDebugStore } from './stores/debug'
 const app = createApp(App)
 const pinia = createPinia()
 
+// Configure Axios for Tauri Sidecar
+import axios from 'axios'
+axios.defaults.baseURL = 'http://127.0.0.1:3000';
+
 app.use(pinia)
 app.use(router)
 

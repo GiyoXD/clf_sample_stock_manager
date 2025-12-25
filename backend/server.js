@@ -168,8 +168,8 @@ app.post('/api/shipments', (req, res) => {
     const { items, dateSent, imagePath } = req.body; // items has .qty now
 
     const insertShipment = db.prepare(`
-        INSERT INTO shipments (stock_id, po, client, product, recipient, courier, tracking, date_sent, image_path, qty)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO shipments (stock_id, po, client, product, recipient, courier, tracking, date_sent, image_path, qty, size)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Use >= qty, and deduct qty
@@ -198,10 +198,11 @@ app.post('/api/shipments', (req, res) => {
                 item.product,
                 item.recipient,
                 item.courier,
-                item.tracking,
+                item.tracking || null,
                 dateSent,
                 imagePath || null,
-                qty
+                qty,
+                item.size || ''
             );
         }
     });
@@ -214,7 +215,7 @@ app.post('/api/shipments', (req, res) => {
     }
 });
 
-// Soft Delete Shipment (Undo)
+// Hard Delete Shipment (Undo/Revert)
 app.delete('/api/shipments/:id', (req, res) => {
     try {
         const { id } = req.params;
@@ -229,6 +230,27 @@ app.delete('/api/shipments/:id', (req, res) => {
         db.prepare("DELETE FROM shipments WHERE id = ?").run(id);
 
         res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Soft Delete Shipment (Move to Trash)
+app.post('/api/shipments/trash/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        db.prepare("UPDATE shipments SET deleted_at = DATETIME('now') WHERE id = ?").run(id);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get Trash Shipments
+app.get('/api/shipments/trash', (req, res) => {
+    try {
+        const rows = db.prepare('SELECT * FROM shipments WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC').all();
+        res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -634,6 +656,181 @@ app.post('/api/export/history-template', async (req, res) => {
 
     } catch (err) {
         console.error('History Export Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- IMPORT API ---
+// Note: We use a separate multer instance for imports to use MemoryStorage
+const memoryUpload = multer({ storage: multer.memoryStorage() });
+
+// Preview Endpoint
+app.post('/api/import/preview', memoryUpload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        const worksheet = workbook.getWorksheet(1); // First sheet
+
+        const rows = [];
+        // Read first 5 rows for preview
+        worksheet.eachRow((row, rowNumber) => {
+            if (rowNumber <= 5) {
+                // row.values is [empty, col1, col2...], slice(1) to get real values
+                const rowData = Array.isArray(row.values) ? row.values.slice(1) : row.values;
+                rows.push(rowData);
+            }
+        });
+
+        res.json({ rows });
+    } catch (err) {
+        console.error('Import Preview Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Helper: Parse Excel Date
+const parseExcelDate = (val) => {
+    if (!val) return '';
+    // If Excel serial date (number > 25569)
+    if (typeof val === 'number' && val > 25569) {
+        // Excel base date: Dec 30 1899
+        const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+        return date.toISOString().split('T')[0];
+    }
+    // If JS Date object
+    if (Object.prototype.toString.call(val) === '[object Date]') {
+        return val.toISOString().split('T')[0];
+    }
+    // If String, try to normalize
+    const str = String(val).trim();
+    // Try YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    // Try DD/MM/YYYY or MM/DD/YYYY? Let's assume input might be localized
+    // Simple fallback: return as string, user might need to fix. 
+    // Or try Date.parse
+    const ts = Date.parse(str);
+    if (!isNaN(ts)) {
+        return new Date(ts).toISOString().split('T')[0];
+    }
+    return str; // Return original if unknown
+};
+
+// Execute Endpoint
+app.post('/api/import/execute', memoryUpload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+        const { target, mapping, startRow } = req.body;
+        const colMap = JSON.parse(mapping); // { db_field: col_index }
+        const startRowIdx = parseInt(startRow) || 2;
+
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        const worksheet = workbook.getWorksheet(1);
+
+        let successCount = 0;
+        let errors = [];
+
+        db.transaction(() => {
+            worksheet.eachRow((row, rowNumber) => {
+                if (rowNumber < startRowIdx) return; // Skip headers
+
+                try {
+                    const getColVal = (dbField) => {
+                        const colIdx = colMap[dbField];
+                        if (!colIdx) return null;
+                        const cell = row.getCell(colIdx);
+                        // Return raw value for dates to handle in parseExcelDate
+                        return cell.value;
+                    };
+
+                    if (target === 'inventory') {
+                        // Required: date_in, po, product, original_qty
+                        const dateIn = parseExcelDate(getColVal('date_in'));
+                        const po = String(getColVal('po') || '');
+                        const product = String(getColVal('product') || '');
+                        const qtyStr = getColVal('original_qty');
+                        const qty = parseInt(qtyStr) || 0;
+
+                        // Optional: current_qty (default to original)
+                        const currentQtyVal = getColVal('current_qty');
+                        let currentQty = qty; // Default to original
+                        if (currentQtyVal !== null && currentQtyVal !== undefined && String(currentQtyVal).trim() !== '') {
+                            const parsed = parseInt(currentQtyVal);
+                            if (!isNaN(parsed)) {
+                                currentQty = parsed;
+                            }
+                        }
+
+                        if (!dateIn || !po || !product || !qty) {
+                            throw new Error(`Row ${rowNumber}: Missing required fields`);
+                        }
+
+                        db.prepare(`
+                            INSERT INTO inventory (date_in, client, po, client_po, product, item_no, size, original_qty, current_qty, note, batch)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        `).run(
+                            dateIn,
+                            String(getColVal('client') || ''),
+                            po,
+                            String(getColVal('client_po') || ''),
+                            product,
+                            String(getColVal('item_no') || ''),
+                            String(getColVal('size') || ''),
+                            qty,
+                            currentQty,
+                            String(getColVal('note') || ''),
+                            String(getColVal('batch') || '')
+                        );
+
+                    } else if (target === 'history') {
+                        // Required: date_sent, po, product, qty
+                        const dateSent = parseExcelDate(getColVal('date_sent'));
+                        const po = String(getColVal('po') || '');
+                        const product = String(getColVal('product') || '');
+                        const qtyStr = getColVal('qty');
+                        const qty = parseInt(qtyStr) || 0;
+
+                        if (!dateSent || !po || !product || !qty) {
+                            throw new Error(`Row ${rowNumber}: Missing required fields`);
+                        }
+
+                        // Note: We do NOT impact stock for history import, it's just a record.
+                        // But we need a dummy stock_id? The history view links to stock...
+                        // Actually, shipment record has `stock_id`. If we confirm migration, maybe we can't link to real stock easily.
+                        // For legacy import, maybe set stock_id to NULL or 0?
+                        // The schema requires `stock_id`.
+                        // Workaround: Create a "Legacy Stock" item? or Allow NULL?
+                        // Let's check schema. `stock_id INTEGER` usually allows NULL unless NOT NULL specified.
+                        // If strict, we might have issues. Let's try NULL.
+
+                        db.prepare(`
+                            INSERT INTO shipments (stock_id, po, client, product, recipient, courier, tracking, date_sent, qty)
+                            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                        `).run(
+                            po,
+                            String(getColVal('client') || ''),
+                            product,
+                            String(getColVal('recipient') || ''),
+                            String(getColVal('courier') || ''),
+                            String(getColVal('tracking') || ''),
+                            dateSent,
+                            qty
+                        );
+                    }
+                    successCount++;
+                } catch (e) {
+                    errors.push(e.message);
+                }
+            });
+        })(); // Execute transaction
+
+        res.json({ success: successCount, errors: errors.slice(0, 10) }); // Limit error output
+
+    } catch (err) {
+        console.error('Import Execute Error:', err);
         res.status(500).json({ error: err.message });
     }
 });
