@@ -20,6 +20,11 @@ const router = createRouter({
             component: () => import('../views/StockListView.vue')
         },
         {
+            path: '/clf',
+            name: 'CLF',
+            component: () => import('../views/CLFView.vue')
+        },
+        {
             path: '/draft',
             name: 'Draft',
             component: () => import('../views/DraftView.vue')

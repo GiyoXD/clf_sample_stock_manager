@@ -31,6 +31,9 @@ const navClasses = (path) => {
                 <RouterLink to="/stock-list" :class="navClasses('/stock-list')">
                     <i class="fa-solid fa-list mr-2"></i>Stock List
                 </RouterLink>
+                <RouterLink to="/clf" :class="navClasses('/clf')">
+                    <i class="fa-solid fa-clipboard-list mr-2"></i>CLF
+                </RouterLink>
                 <RouterLink to="/draft" :class="navClasses('/draft')">
                     <i class="fa-solid fa-paper-plane mr-2"></i>Express Draft
                 </RouterLink>

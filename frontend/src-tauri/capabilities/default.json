@@ -6,6 +6,18 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "server",
+          "cmd": "server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }

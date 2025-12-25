@@ -6,6 +6,7 @@ const store = useInventoryStore()
 
 const searchPO = ref('')
 const duplicates = ref([])
+const relatedPOs = ref([])
 const recentEntries = ref([])
 const form = ref({
     po: '',
@@ -15,7 +16,12 @@ const form = ref({
     itemNo: '',
     batch: '',
     note: '',
-    date: new Date().toISOString().split('T')[0],
+    note: '',
+    date: (() => {
+        const now = new Date();
+        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+        return now.toISOString().slice(0, 16);
+    })(),
     qty: 1,
     size: 'A3'
 })
@@ -59,6 +65,27 @@ const handleSearch = () => {
     duplicates.value = store.inventory
         .filter(i => String(i.po).toLowerCase() === searchKey)
         .map(i => ({ dateText: i.date_in, qty: i.original_qty || i.originalQty, size: i.size }))
+
+    // Check Related POs / Sub-POs (Warning)
+    const related = new Set()
+    
+    // Check Master Data for suffix matches
+    store.masterData.forEach(r => {
+        const po = String(r.using_po || '').toLowerCase()
+        if (po.length > searchKey.length && po.startsWith(searchKey)) {
+            related.add(r.using_po)
+        }
+    })
+
+    // Check Inventory for suffix matches
+    store.inventory.forEach(i => {
+        const po = String(i.po || '').toLowerCase()
+        if (po.length > searchKey.length && po.startsWith(searchKey)) {
+            related.add(i.po)
+        }
+    })
+
+    relatedPOs.value = Array.from(related).sort()
 }
 
 const saveStock = async () => {
@@ -71,6 +98,7 @@ const saveStock = async () => {
         // Reset
         searchPO.value = ''
         duplicates.value = []
+        relatedPOs.value = []
         form.value.qty = 1 // Reset qty
         // Keep date/size preferably
     } catch (e) {
@@ -108,6 +136,24 @@ const undoEntry = async (index, id) => {
                 <button @click="handleSearch" class="absolute right-2 top-2 bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-md transition-colors">
                     Search
                 </button>
+            </div>
+
+            <!-- Warning for Related POs -->
+            <div v-if="relatedPOs.length > 0" class="mt-4 bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-r-md">
+                <div class="flex">
+                    <i class="fa-solid fa-circle-info text-indigo-500 text-xl mr-3"></i>
+                    <div>
+                        <h3 class="text-indigo-800 font-bold">Related Variations Found!</h3>
+                        <p class="text-xs text-indigo-600 mb-1">Did you mean one of these?</p>
+                        <div class="flex flex-wrap gap-2 mt-1">
+                            <span v-for="po in relatedPOs" :key="po" 
+                                @click="searchPO = po; handleSearch()"
+                                class="cursor-pointer bg-white border border-indigo-200 text-indigo-700 px-2 py-1 rounded text-xs hover:bg-indigo-100 hover:border-indigo-300 transition-colors font-mono">
+                                {{ po }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Warning for Duplicates -->
@@ -163,7 +209,7 @@ const undoEntry = async (index, id) => {
                 <div class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-slate-700 mb-1">Date In</label>
-                        <input type="date" v-model="form.date" class="w-full border border-slate-300 rounded px-3 py-2 focus:ring-1 focus:ring-teal-500 outline-none">
+                        <input type="datetime-local" v-model="form.date" class="w-full border border-slate-300 rounded px-3 py-2 focus:ring-1 focus:ring-teal-500 outline-none">
                     </div>
                     <div class="grid grid-cols-2 gap-3">
                         <div>
@@ -196,6 +242,7 @@ const undoEntry = async (index, id) => {
                     <tr>
                         <th class="px-6 py-3">PO</th>
                         <th class="px-6 py-3">Product</th>
+                        <th class="px-6 py-3">Size</th>
                         <th class="px-6 py-3">Qty</th>
                         <th class="px-6 py-3">Action</th>
                     </tr>
@@ -204,7 +251,8 @@ const undoEntry = async (index, id) => {
                     <tr v-for="(item, idx) in recentEntries" :key="item.id">
                         <td class="px-6 py-3 font-mono">{{ item.po }}</td>
                         <td class="px-6 py-3">{{ item.product }}</td>
-                        <td class="px-6 py-3">{{ item.originalQty || item.original_qty }}</td>
+                        <td class="px-6 py-3">{{ item.size }}</td>
+                        <td class="px-6 py-3">{{ item.originalQty || item.original_qty || item.qty }}</td>
                         <td class="px-6 py-3">
                             <button @click="undoEntry(idx, item.id)" class="text-rose-500 hover:text-rose-700">
                                 <i class="fa-solid fa-trash"></i> Undo

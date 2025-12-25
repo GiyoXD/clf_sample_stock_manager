@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 import { useRouter } from 'vue-router'
+import ImportModal from '../components/ImportModal.vue'
 
 const store = useInventoryStore()
 const router = useRouter()
@@ -15,7 +16,8 @@ const filters = ref({
     dateEnd: '',
     po: '',
     client: '',
-    product: ''
+    product: '',
+    status: 'all' // all, available, out_of_stock
 })
 
 onMounted(() => {
@@ -27,10 +29,10 @@ const filteredStock = computed(() => {
 
     // Filter by Date Range
     if (filters.value.dateStart) {
-        result = result.filter(i => (i.date_in || i.dateIn) >= filters.value.dateStart)
+        result = result.filter(i => (i.date_in || i.dateIn || '').substring(0, 10) >= filters.value.dateStart)
     }
     if (filters.value.dateEnd) {
-        result = result.filter(i => (i.date_in || i.dateIn) <= filters.value.dateEnd)
+        result = result.filter(i => (i.date_in || i.dateIn || '').substring(0, 10) <= filters.value.dateEnd)
     }
 
     // Filter by PO (Multi-line)
@@ -54,6 +56,13 @@ const filteredStock = computed(() => {
     if (filters.value.product.trim()) {
         const query = filters.value.product.trim().toLowerCase()
         result = result.filter(i => (i.product || '').toLowerCase().includes(query))
+    }
+
+    // Filter by Status
+    if (filters.value.status === 'available') {
+        result = result.filter(i => (i.current_qty !== undefined ? i.current_qty : i.currentQty) > 0)
+    } else if (filters.value.status === 'out_of_stock') {
+        result = result.filter(i => (i.current_qty !== undefined ? i.current_qty : i.currentQty) <= 0)
     }
     
     return result
@@ -112,6 +121,25 @@ const exportToTemplate = async () => {
     }
 }
 
+const searchInClf = () => {
+    const items = store.currentInventory.filter(i => selected.value.includes(i.id))
+    const pos = items.map(i => i.po).filter(p => p).filter((v, i, a) => a.indexOf(v) === i) // unique POs
+    
+    if (pos.length === 0) {
+        alert('No PO numbers found in selected items.')
+        return
+    }
+
+    // Join with newline char encoded for URL or just pass encoded JSON/string
+    // Using simple join with a delimiter that we can split by later, or JSON.
+    // Query params have length limits, but typically ~2KB is fine. 
+    // JSON stringify is safer for arbitrary chars.
+    router.push({ 
+        path: '/clf', 
+        query: { pos: JSON.stringify(pos) } 
+    })
+}
+
 const deleteItem = async (id) => {
     if (!confirm('Are you sure you want to delete this item?')) return
     try {
@@ -120,20 +148,71 @@ const deleteItem = async (id) => {
         alert('Delete failed: ' + e.message)
     }
 }
+
+const batchDelete = async () => {
+    if (!confirm(`Move ${selected.value.length} items to Trash?`)) return
+    
+    // Batch delete
+    try {
+        // Loop for now
+        for (const id of selected.value) {
+            await store.deleteStock(id)
+        }
+        selected.value = [] // Clear selection
+    } catch (e) {
+        alert('Batch delete failed: ' + e.message)
+    }
+}
+
+// Import Modal
+const showImportModal = ref(false)
+const openImport = () => {
+    showImportModal.value = true
+}
+const handleImportSuccess = () => {
+    store.fetchAll()
+}
+
+const formatDateTime = (dateStr) => {
+    if (!dateStr) return ''
+    // If it has 'T', replace with space and remove seconds if wanted.
+    // Standard ISO: YYYY-MM-DDTHH:mm:ss.sssZ
+    // We want YYYY-MM-DD HH:mm
+    return dateStr.replace('T', ' ').substring(0, 16)
+}
 </script>
 
 <template>
     <div class="space-y-4">
+        <ImportModal 
+            :show="showImportModal" 
+            target="inventory" 
+            @close="showImportModal = false" 
+            @refresh="handleImportSuccess" 
+        />
         <!-- Dashboard / Filter Header -->
         <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-4">
              <div class="flex justify-between items-center mb-4">
                 <h2 class="text-xl font-bold text-slate-700">Stock Inventory</h2>
                 <!-- Bulk Actions -->
                 <div class="flex space-x-2">
-                        <div v-if="selected.length > 0" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center animate-bounce">
+                     <button @click="openImport" class="bg-indigo-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-indigo-700 shadow-sm">
+                        <i class="fa-solid fa-file-import mr-1"></i> Import
+                    </button>
+                    <button 
+                        v-if="selected.length > 0" 
+                        @click="batchDelete" 
+                        class="bg-rose-500 text-white px-3 py-1 rounded text-xs font-bold hover:bg-rose-600 shadow-sm animate-pulse"
+                    >
+                        <i class="fa-solid fa-trash mr-1"></i> Delete {{ selected.length }}
+                    </button>
+                     <div v-if="selected.length > 0" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center animate-bounce">
                             <span class="mr-3 font-bold">{{ selected.length }} Selected</span>
                             <button @click="addToDraft" class="bg-teal-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-teal-700 mr-2">
                                 Add to Express Draft
+                            </button>
+                             <button @click="searchInClf" class="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700 mr-2">
+                                <i class="fa-solid fa-search mr-1"></i> Search in CLF
                             </button>
                              <button @click="exportToTemplate" class="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-emerald-700">
                                 <i class="fa-solid fa-file-excel mr-1"></i> Export Template
@@ -168,9 +247,17 @@ const deleteItem = async (id) => {
                     <label class="block text-xs font-bold text-slate-400 mb-1">Product Name</label>
                     <input type="text" v-model="filters.product" placeholder="Search Product..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Status</label>
+                    <select v-model="filters.status" class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none bg-white">
+                        <option value="all">All Statuses</option>
+                        <option value="available">Available (In Stock)</option>
+                        <option value="out_of_stock">Out of Stock</option>
+                    </select>
+                </div>
             </div>
-            <div v-if="filters.dateStart || filters.dateEnd || filters.po || filters.product" class="mt-2 text-right">
-                <button @click="filters = { dateStart: '', dateEnd: '', po: '', product: '', client: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
+            <div v-if="filters.dateStart || filters.dateEnd || filters.po || filters.product || filters.status !== 'all'" class="mt-2 text-right">
+                <button @click="filters = { dateStart: '', dateEnd: '', po: '', product: '', client: '', status: 'all' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
             </div>
         </div>
 
@@ -185,6 +272,7 @@ const deleteItem = async (id) => {
                         <th class="px-6 py-4">Client</th>
                         <th class="px-6 py-4">PO / Client PO</th>
                         <th class="px-6 py-4">Product / Item</th>
+                        <th class="px-6 py-4">Size</th>
                         <th class="px-6 py-4">Batch / Note</th>
                         <th class="px-6 py-4 text-center">Orig Qty</th>
                         <th class="px-4 py-4 text-center">Curr Qty</th>
@@ -197,7 +285,7 @@ const deleteItem = async (id) => {
                         <td class="px-6 py-3">
                             <input type="checkbox" v-model="selected" :value="item.id" class="w-5 h-5 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </td>
-                        <td class="px-6 py-3 whitespace-nowrap">{{ item.date_in || item.dateIn }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap">{{ formatDateTime(item.date_in || item.dateIn) }}</td>
                         <td class="px-6 py-3 font-medium text-slate-600">{{ item.client }}</td>
                         <td class="px-6 py-3">
                             <div class="font-bold text-teal-600">{{ item.po }}</div>
@@ -205,8 +293,9 @@ const deleteItem = async (id) => {
                         </td>
                         <td class="px-6 py-3">
                             <div class="font-medium">{{ item.product }}</div>
-                            <div class="text-xs text-slate-500">{{ item.item_no || item.itemNo }} ({{ item.size }})</div>
+                            <div class="text-xs text-slate-500">{{ item.item_no || item.itemNo }}</div>
                         </td>
+                        <td class="px-6 py-3 font-medium text-slate-600">{{ item.size }}</td>
                         <td class="px-6 py-3 max-w-xs truncate" :title="item.note">
                             <div class="text-xs font-mono bg-slate-100 inline p-1 rounded">{{ item.batch }}</div>
                             <div class="text-xs text-slate-400 mt-1 truncate">{{ item.note }}</div>
