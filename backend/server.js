@@ -57,11 +57,15 @@ app.get('/api/inventory/trash', (req, res) => {
 app.post('/api/inventory', (req, res) => {
     try {
         const { po, client, clientPO, product, itemNo, batch, note, date, size, qty } = req.body;
+
+        // Default qty to 0 if missing/invalid
+        const qtyNum = parseInt(qty) || 0;
+
         const stmt = db.prepare(`
             INSERT INTO inventory (po, client, client_po, product, item_no, batch, note, date_in, size, original_qty, current_qty)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
-        const info = stmt.run(po, client, clientPO, product, itemNo, batch, note, date, size, qty, qty);
+        const info = stmt.run(po, client, clientPO, product, itemNo, batch, note, date, size, qtyNum, qtyNum);
         res.json({ id: info.lastInsertRowid, ...req.body });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -73,10 +77,17 @@ app.put('/api/inventory/:id', (req, res) => {
     try {
         const { id } = req.params;
         const { originalQty, note, po, product, itemNo } = req.body;
+
+        // Strict Numeric Check
+        const qtyNum = parseInt(originalQty);
+        if (isNaN(qtyNum)) {
+            return res.status(400).json({ error: 'Original Quantity must be a valid number' });
+        }
+
         const row = db.prepare('SELECT original_qty, current_qty FROM inventory WHERE id = ?').get(id);
         if (!row) return res.status(404).json({ error: 'Item not found' });
 
-        const diff = originalQty - row.original_qty;
+        const diff = qtyNum - row.original_qty;
         const newCurrent = row.current_qty + diff;
 
         const stmt = db.prepare(`
@@ -319,7 +330,7 @@ app.post('/api/master-data/sync', (req, res) => {
                 console.log('Clearing master_data table (Clear flag check passed)');
             }
 
-            let failedCount = 0;
+
             let skippedCount = 0;
 
             for (let i = 0; i < rows.length; i++) {
@@ -332,33 +343,23 @@ app.post('/api/master-data/sync', (req, res) => {
                     continue;
                 }
 
-                try {
-                    insert.run(
-                        String(using_po).trim(),
-                        String(row.client || '').trim(),
-                        String(row.client_po || '').trim(),
-                        String(row.product_name || '').trim(),
-                        String(row.product_code || '').trim(),
-                        String(row.quality_note || '').trim()
-                    );
-                } catch (rowErr) {
-                    failedCount++;
-                    console.error(`Row ${i} import failed:`, row, rowErr.message);
-                }
+                insert.run(
+                    String(using_po).trim(),
+                    String(row.client || '').trim(),
+                    String(row.client_po || '').trim(),
+                    String(row.product_name || '').trim(),
+                    String(row.product_code || '').trim(),
+                    String(row.quality_note || '').trim()
+                );
             }
 
-            if (failedCount > 0) {
-                console.warn(`Import warning: ${failedCount} rows failed, ${skippedCount} rows skipped.`);
+            if (skippedCount > 0) {
+                console.warn(`Import warning: ${skippedCount} rows skipped (no PO).`);
             }
 
-            const validRows = rows.length - failedCount - skippedCount;
+            const validRows = rows.length - skippedCount;
             if (validRows === 0 && rows.length > 0) {
-                console.error(`Batch Failure: ${rows.length} rows processed. ${skippedCount} skipped (no PO), ${failedCount} failed.`);
-                // Throwing here will abort the transaction
-                if (rows.length > 5) {
-                    // Only throw if significant failure to avoid blocking partial updates?
-                    // Actually, user expects atomic sync likely.
-                }
+                console.error(`Batch Failure: ${rows.length} rows processed. ${skippedCount} skipped (no PO).`);
             }
         });
 
@@ -674,8 +675,12 @@ app.post('/api/import/preview', memoryUpload.single('file'), async (req, res) =>
         worksheet.eachRow((row, rowNumber) => {
             if (rowNumber <= 5) {
                 // row.values is [empty, col1, col2...], slice(1) to get real values
-                const rowData = Array.isArray(row.values) ? row.values.slice(1) : row.values;
-                rows.push(rowData);
+                // We map each value through getSafeCellValue first to preview clean text
+                const rowValues = row.values;
+                const safeRow = Array.isArray(rowValues)
+                    ? rowValues.map(v => getSafeCellValue(v)).slice(1)
+                    : []; // object fallback? usually array
+                rows.push(safeRow);
             }
         });
 
@@ -686,31 +691,49 @@ app.post('/api/import/preview', memoryUpload.single('file'), async (req, res) =>
     }
 });
 
+// Helper: Safe Cell Value Extraction (Handles Rich Text, Hyperlinks, Formulas)
+const getSafeCellValue = (cell) => {
+    if (cell === null || cell === undefined) return '';
+    if (typeof cell === 'object') {
+        if (cell instanceof Date) return cell; // Preserve Date objects
+        if (cell.text) return cell.text; // Rich Text or Hyperlink with text
+        if (cell.result) return cell.result; // Formula result
+        if (cell.hyperlink) return cell.hyperlink; // Hyperlink raw
+        // Try value if nothing else matches (dates are objects sometimes?)
+        if (cell.value) return getSafeCellValue(cell.value);
+        return '';
+    }
+    return cell;
+};
+
 // Helper: Parse Excel Date
 const parseExcelDate = (val) => {
     if (!val) return '';
+
+    // Normalize using safe getter logic first if object passed (though we usually pass value)
+    let safeVal = val;
+    if (typeof val === 'object' && !(val instanceof Date)) {
+        safeVal = getSafeCellValue(val);
+    }
+
     // If Excel serial date (number > 25569)
-    if (typeof val === 'number' && val > 25569) {
-        // Excel base date: Dec 30 1899
-        const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+    if (typeof safeVal === 'number' && safeVal > 25569) {
+        const date = new Date(Math.round((safeVal - 25569) * 86400 * 1000));
         return date.toISOString().split('T')[0];
     }
     // If JS Date object
-    if (Object.prototype.toString.call(val) === '[object Date]') {
-        return val.toISOString().split('T')[0];
+    if (Object.prototype.toString.call(safeVal) === '[object Date]') {
+        return safeVal.toISOString().split('T')[0];
     }
-    // If String, try to normalize
-    const str = String(val).trim();
-    // Try YYYY-MM-DD
+    // If String
+    const str = String(safeVal).trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-    // Try DD/MM/YYYY or MM/DD/YYYY? Let's assume input might be localized
-    // Simple fallback: return as string, user might need to fix. 
-    // Or try Date.parse
+
     const ts = Date.parse(str);
     if (!isNaN(ts)) {
         return new Date(ts).toISOString().split('T')[0];
     }
-    return str; // Return original if unknown
+    return null; // Strict: Invalid date = data corruption risk -> Fail import
 };
 
 // Execute Endpoint
@@ -738,8 +761,8 @@ app.post('/api/import/execute', memoryUpload.single('file'), async (req, res) =>
                         const colIdx = colMap[dbField];
                         if (!colIdx) return null;
                         const cell = row.getCell(colIdx);
-                        // Return raw value for dates to handle in parseExcelDate
-                        return cell.value;
+                        // Use safe extraction
+                        return getSafeCellValue(cell.value);
                     };
 
                     if (target === 'inventory') {
@@ -761,7 +784,12 @@ app.post('/api/import/execute', memoryUpload.single('file'), async (req, res) =>
                         }
 
                         if (!dateIn || !po || !product || !qty) {
-                            throw new Error(`Row ${rowNumber}: Missing required fields`);
+                            const missing = [];
+                            if (!dateIn) missing.push('Date (In)');
+                            if (!po) missing.push('PO');
+                            if (!product) missing.push('Product');
+                            if (!qty) missing.push('Qty');
+                            throw new Error(`Row ${rowNumber}: Missing or Invalid fields: ${missing.join(', ')}`);
                         }
 
                         db.prepare(`
@@ -790,7 +818,12 @@ app.post('/api/import/execute', memoryUpload.single('file'), async (req, res) =>
                         const qty = parseInt(qtyStr) || 0;
 
                         if (!dateSent || !po || !product || !qty) {
-                            throw new Error(`Row ${rowNumber}: Missing required fields`);
+                            const missing = [];
+                            if (!dateSent) missing.push('Date (Sent)');
+                            if (!po) missing.push('PO');
+                            if (!product) missing.push('Product');
+                            if (!qty) missing.push('Qty');
+                            throw new Error(`Row ${rowNumber}: Missing or Invalid fields: ${missing.join(', ')}`);
                         }
 
                         // Note: We do NOT impact stock for history import, it's just a record.

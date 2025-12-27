@@ -1,6 +1,6 @@
 {
   "name": "sample-manager-backend",
-  "version": "1.0.2",
+  "version": "1.0.7",
   "bin": "server.js",
   "main": "server.js",
   "scripts": {
