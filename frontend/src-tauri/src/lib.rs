@@ -1,52 +1,42 @@
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::CommandChild;
+use std::sync::{Arc, Mutex};
+
+struct ServerProcess(Arc<Mutex<Option<CommandChild>>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  let server_process = Arc::new(Mutex::new(None));
+
   tauri::Builder::default()
     .plugin(tauri_plugin_log::Builder::default().build())
     .plugin(tauri_plugin_shell::init())
+    .manage(ServerProcess(server_process.clone()))
     .setup(|app| {
         let handle = app.handle().clone();
+        let process_state = app.state::<ServerProcess>();
+        let process_state_clone = process_state.0.clone();
         
         // Spawn Sidecar
         tauri::async_runtime::spawn(async move {
-            let sidecar_command = handle.shell().sidecar("server").unwrap();
-            
-            // Pass DB_PATH if needed (optional, improved robustness)
-            // For now, let's just run it. The sidecar will use default path in current dir if not specified.
-            // Wait, current dir for sidecar might be weird.
-            // In db.js we used process.env.DB_PATH.
-            // Let's get AppData dir and pass it.
-            
             let app_data = handle.path().app_data_dir().unwrap();
             if !app_data.exists() {
                 std::fs::create_dir_all(&app_data).unwrap();
             }
             let db_path = app_data.join("database.sqlite").to_string_lossy().to_string();
             
-            // Set Env Var (Command API allows env? No, arguments or env.)
-            // Sidecar command builder doesn't easily expose env vars setting in simple API?
-            // "args" is easier. But we configured db.js to read process.env.DB_PATH.
-            // We can change db.js to also read process.argv.
-            // OR we can rely on "cwd".
-            // Let's check db.js again.
-            
-            // For simplicity, let's assume it runs.
-            // Note: DB_PATH env var support in Tauri sidecar requires configuration.
-            // It's often easier to pass as arg: server.exe --db-path "..."
-            // But db.js doesn't parse args.
-            
-            // Let's stick to basic spawn for now and see if it works.
-            // If it creates "database.sqlite" in the folder where exe is, that might be readonly.
-            // But wait, "server.js" checks `path.join(__dirname, 'database.sqlite')`. 
-            // In pkg, __dirname is in snapshot.
-            // WE NEED TO PASS THE PATH.
-            // I should have updated db.js to read args.
-            
-            let (mut rx, mut _child) = sidecar_command
+            println!("Tauri Sidecar: Using DB Path: {}", db_path);
+
+            let sidecar_command = handle.shell().sidecar("server").unwrap()
+                .args(["--db-path", &db_path]);
+
+            let (mut rx, child) = sidecar_command
                 .spawn()
                 .expect("Failed to spawn sidecar");
+
+            // Store child handle
+            *process_state_clone.lock().unwrap() = Some(child);
 
             // Monitor Output
             tauri::async_runtime::spawn(async move {
@@ -71,6 +61,18 @@ pub fn run() {
 
         Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while running tauri application")
+    .run(move |app_handle, event| match event {
+        RunEvent::Exit => {
+            let state = app_handle.state::<ServerProcess>();
+            // Lock and take the option
+            let mut guard = state.0.lock().unwrap();
+            if let Some(child) = guard.take() {
+                println!("Killing server process...");
+                let _ = child.kill();
+            }
+        }
+        _ => {}
+    });
 }

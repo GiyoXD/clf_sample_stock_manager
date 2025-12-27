@@ -1,9 +1,14 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const dbPath = process.env.DB_PATH || path.join(__dirname, 'database.sqlite');
+// Parse CLI args for --db-path
+const args = process.argv.slice(2);
+const dbPathArgIdx = args.indexOf('--db-path');
+const dbPathArg = dbPathArgIdx !== -1 ? args[dbPathArgIdx + 1] : null;
+
+const dbPath = dbPathArg || process.env.DB_PATH || path.join(__dirname, 'database.sqlite');
 console.log('Database Path:', dbPath); // Debug log
-const db = new Database(dbPath, { verbose: console.log });
+const db = new Database(dbPath); // Verbose disabled for performance
 db.pragma('journal_mode = WAL');
 
 // Initialize Tables

@@ -112,14 +112,22 @@ const addToDraft = () => {
     router.push('/draft')
 }
 
-const exportToTemplate = async () => {
+const exportToExcel = async () => {
+    // If selections, export those. If not, export all.
+    let ids = selected.value
+    if (ids.length === 0) {
+        if (!confirm('No items selected. Export ALL inventory?')) return
+        ids = [] // Empty array signals backend to export all
+    }
+    
     try {
-        await store.exportStockTemplate(selected.value)
-        selected.value = [] // clear selection after export?
+        await store.exportStockTemplate(ids)
+        // selected.value = [] // Optional: clear selection
     } catch (e) {
         alert('Export failed: ' + e.message)
     }
 }
+
 
 const searchInClf = () => {
     const items = store.currentInventory.filter(i => selected.value.includes(i.id))
@@ -164,6 +172,33 @@ const batchDelete = async () => {
     }
 }
 
+const copyToClipboard = async (field) => {
+    const items = store.currentInventory.filter(i => selected.value.includes(i.id))
+    if (items.length === 0) return
+
+    let values = []
+    if (field === 'po') values = items.map(i => i.po)
+    else if (field === 'client_po') values = items.map(i => i.client_po || i.clientPO)
+    else if (field === 'product') values = items.map(i => i.product)
+    
+    // Filter empty
+    values = values.filter(v => v)
+
+    if (values.length === 0) {
+        alert('No data found for the selected items.')
+        return
+    }
+
+    const text = values.join('\n')
+    try {
+        await navigator.clipboard.writeText(text)
+        alert(`Copied ${values.length} items to clipboard!`)
+    } catch (err) {
+        console.error('Failed to copy: ', err)
+        alert('Failed to copy to clipboard.')
+    }
+}
+
 // Import Modal
 const showImportModal = ref(false)
 const openImport = () => {
@@ -202,11 +237,11 @@ const formatDateTime = (dateStr) => {
                     <button 
                         v-if="selected.length > 0" 
                         @click="batchDelete" 
-                        class="bg-rose-500 text-white px-3 py-1 rounded text-xs font-bold hover:bg-rose-600 shadow-sm animate-pulse"
+                        class="bg-rose-500 text-white px-3 py-1 rounded text-xs font-bold hover:bg-rose-600 shadow-sm"
                     >
                         <i class="fa-solid fa-trash mr-1"></i> Delete {{ selected.length }}
                     </button>
-                     <div v-if="selected.length > 0" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center animate-bounce">
+                     <div v-if="selected.length > 0" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center">
                             <span class="mr-3 font-bold">{{ selected.length }} Selected</span>
                             <button @click="addToDraft" class="bg-teal-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-teal-700 mr-2">
                                 Add to Express Draft
@@ -214,8 +249,20 @@ const formatDateTime = (dateStr) => {
                              <button @click="searchInClf" class="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700 mr-2">
                                 <i class="fa-solid fa-search mr-1"></i> Search in CLF
                             </button>
-                             <button @click="exportToTemplate" class="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-emerald-700">
-                                <i class="fa-solid fa-file-excel mr-1"></i> Export Template
+                            
+                            <!-- Copy Dropdown / Group -->
+                            <div class="relative group mr-2">
+                                <button class="bg-slate-700 text-white px-3 py-1 rounded text-xs font-bold hover:bg-slate-800">
+                                    <i class="fa-solid fa-copy mr-1"></i> Copy Info
+                                </button>
+                                <div class="absolute right-0 top-full mt-1 w-40 bg-white rounded shadow-xl border border-slate-200 hidden group-hover:block z-50 overflow-hidden">
+                                    <a @click="copyToClipboard('po')" class="block px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 cursor-pointer">Copy POs</a>
+                                    <a @click="copyToClipboard('client_po')" class="block px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 cursor-pointer">Copy Client POs</a>
+                                    <a @click="copyToClipboard('product')" class="block px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 cursor-pointer">Copy Products</a>
+                                </div>
+                            </div>
+                             <button @click="exportToExcel" class="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-emerald-700 shadow-sm">
+                                <i class="fa-solid fa-file-excel mr-1"></i> Export
                             </button>
                         </div>
                 </div>
@@ -281,7 +328,7 @@ const formatDateTime = (dateStr) => {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 text-slate-700">
-                    <tr v-for="item in filteredStock" :key="item.id" :class="{'bg-indigo-50': selected.includes(item.id)}">
+                    <tr v-for="item in filteredStock" :key="item.id" :class="selected.includes(item.id) ? 'bg-indigo-50' : 'even:bg-gray-100 hover:bg-gray-200 transition-colors'">
                         <td class="px-6 py-3">
                             <input type="checkbox" v-model="selected" :value="item.id" class="w-5 h-5 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </td>

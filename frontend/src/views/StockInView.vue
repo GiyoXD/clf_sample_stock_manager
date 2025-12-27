@@ -115,6 +115,8 @@ const undoEntry = async (index, id) => {
         alert('Failed to delete: ' + e.message)
     }
 }
+
+
 </script>
 
 <template>

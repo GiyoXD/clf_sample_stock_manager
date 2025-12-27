@@ -137,6 +137,36 @@ const exportHistory = async () => {
     }
 }
 
+const copyToClipboard = async (field) => {
+    // Find items in the full history or filtered history
+    // Using filteredHistory ensures we find them even if search is active
+    const items = filteredHistory.value.filter(s => selected.value.includes(s.id))
+    if (items.length === 0) return
+
+    let values = []
+    if (field === 'po') values = items.map(s => s.po)
+    else if (field === 'client') values = items.map(s => s.client)
+    else if (field === 'product') values = items.map(s => s.product)
+    else if (field === 'tracking') values = items.map(s => s.tracking)
+    
+    // Filter empty
+    values = values.filter(v => v)
+
+    if (values.length === 0) {
+        alert('No data found for the selected items.')
+        return
+    }
+
+    const text = values.join('\n')
+    try {
+        await navigator.clipboard.writeText(text)
+        alert(`Copied ${values.length} items to clipboard!`)
+    } catch (err) {
+        console.error('Failed to copy: ', err)
+        alert('Failed to copy to clipboard.')
+    }
+}
+
 // Import Modal
 const showImportModal = ref(false)
 const openImport = () => {
@@ -166,7 +196,7 @@ const handleImportSuccess = () => {
                     <button 
                         v-if="selected.length > 0" 
                         @click="batchDelete" 
-                        class="bg-rose-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-rose-600 transition-colors animate-pulse mr-2"
+                        class="bg-rose-500 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-rose-600 transition-colors mr-2"
                     >
                         <i class="fa-solid fa-trash mr-1"></i> Delete {{ selected.length }}
                     </button>
@@ -177,6 +207,19 @@ const handleImportSuccess = () => {
                     >
                         <i class="fa-solid fa-rotate-left mr-1"></i> Revert {{ selected.length }}
                     </button>
+                    
+                     <!-- Copy Dropdown Group -->
+                    <div v-if="selected.length > 0" class="relative group mr-2 inline-block">
+                        <button class="bg-slate-700 text-white px-3 py-1 rounded shadow-md text-xs font-bold hover:bg-slate-800 transition-colors">
+                            <i class="fa-solid fa-copy mr-1"></i> Copy Info
+                        </button>
+                        <div class="absolute right-0 top-full mt-1 w-40 bg-white rounded shadow-xl border border-slate-200 hidden group-hover:block z-50 overflow-hidden">
+                            <a @click="copyToClipboard('po')" class="block px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 cursor-pointer">Copy POs</a>
+                            <a @click="copyToClipboard('tracking')" class="block px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 cursor-pointer">Copy Tracking</a>
+                            <a @click="copyToClipboard('product')" class="block px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 cursor-pointer">Copy Products</a>
+                        </div>
+                    </div>
+
                     <button 
                         v-if="selected.length > 0" 
                         @click="exportHistory" 
@@ -199,12 +242,13 @@ const handleImportSuccess = () => {
                     <input type="text" v-model="filters.client" placeholder="Search Client..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
                 <div>
-                    <label class="block text-xs font-bold text-slate-400 mb-1">PO Number</label>
-                    <input 
+                    <label class="block text-xs font-bold text-slate-400 mb-1">PO Number (One per line)</label>
+                    <textarea 
                         v-model="filters.po" 
                         placeholder="Search POs..." 
-                        class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none"
-                    >
+                        rows="1"
+                        class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none min-h-[38px] max-h-[120px]"
+                    ></textarea>
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">Product Name</label>
@@ -240,7 +284,7 @@ const handleImportSuccess = () => {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    <tr v-for="ship in filteredHistory" :key="ship.id" :class="{'bg-rose-50': selected.includes(ship.id)}">
+                    <tr v-for="ship in filteredHistory" :key="ship.id" :class="selected.includes(ship.id) ? 'bg-rose-50' : 'even:bg-gray-100 hover:bg-gray-200 transition-colors'">
                         <td class="px-6 py-3">
                             <input type="checkbox" v-model="selected" :value="ship.id" class="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </td>

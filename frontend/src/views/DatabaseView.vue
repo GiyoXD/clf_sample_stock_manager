@@ -343,6 +343,59 @@ const handleRestore = async (event) => {
     }
     event.target.value = ''
 }
+
+// --- Backup Manager Logic ---
+const backups = ref([])
+const showBackupModal = ref(false)
+
+const openBackupModal = async () => {
+    await fetchBackups()
+    showBackupModal.value = true
+}
+
+const fetchBackups = async () => {
+    try {
+        const res = await axios.get('/api/backups')
+        backups.value = res.data
+    } catch (e) {
+        console.error(e)
+        showNotification('Failed to fetch backups', 'error')
+    }
+}
+
+const restoreBackup = async (filename) => {
+    if (!confirm(`WARNING: Restore from ${filename}?\n\nCurrent data will be overwritten and lost.\nAre you sure?`)) return
+    try {
+        await axios.post(`/api/backups/${filename}/restore`)
+        alert('Restore Successful! The application will now reload.')
+        window.location.reload()
+    } catch (e) {
+        alert('Restore Failed: ' + (e.response?.data?.error || e.message))
+    }
+}
+
+const deleteBackup = async (filename) => {
+    if (!confirm(`Delete backup ${filename}?`)) return
+    try {
+        await axios.delete(`/api/backups/${filename}`)
+        fetchBackups()
+        showNotification('Backup deleted')
+    } catch (e) {
+        alert('Delete Failed: ' + e.message)
+    }
+}
+
+const formatSize = (bytes) => {
+    if (bytes === 0) return '0 B'
+    const k = 1024
+    const sizes = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const formatDate = (dateStr) => {
+    return new Date(dateStr).toLocaleString()
+}
 </script>
 
 <template>
@@ -442,9 +495,13 @@ const handleRestore = async (event) => {
                     <i class="fa-solid fa-download text-3xl mb-2 text-indigo-500"></i>
                     <span>Backup Database Now</span>
                 </button>
+                <button @click="openBackupModal" class="flex-1 bg-white border-2 border-slate-200 hover:border-sky-500 hover:text-sky-600 text-slate-600 font-bold py-4 rounded-xl transition-all flex flex-col items-center justify-center">
+                    <i class="fa-solid fa-server text-3xl mb-2 text-sky-500"></i>
+                    <span>Manage Backups</span>
+                </button>
                 <button @click="triggerRestore" class="flex-1 bg-white border-2 border-slate-200 hover:border-teal-500 hover:text-teal-600 text-slate-600 font-bold py-4 rounded-xl transition-all flex flex-col items-center justify-center">
                     <i class="fa-solid fa-upload text-3xl mb-2 text-teal-500"></i>
-                    <span>Restore Backup</span>
+                    <span>Restore from File</span>
                 </button>
                 <!-- Hidden Restore Input -->
                 <input ref="restoreInput" type="file" accept=".sqlite" class="hidden" @change="handleRestore">
@@ -661,6 +718,55 @@ const handleRestore = async (event) => {
                 <button @click="confirmImport" class="px-6 py-2 bg-teal-600 text-white font-bold rounded-lg shadow-md hover:bg-teal-700 hover:shadow-lg transition-all transform active:scale-95">
                     Confirm Import
                 </button>
+            </div>
+        </div>
+    </div>
+    <!-- Backup Manager Modal -->
+    <div v-if="showBackupModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden animate-[fade-in_0.2s_ease-out] flex flex-col max-h-[80vh]">
+            <div class="bg-indigo-600 px-6 py-4 flex justify-between items-center shrink-0">
+                <h3 class="text-xl font-bold text-white"><i class="fa-solid fa-server mr-2"></i> Backup Manager</h3>
+                <button @click="showBackupModal = false" class="text-white hover:text-indigo-200 transition-colors">
+                    <i class="fa-solid fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <div class="overflow-auto p-0 flex-1">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase sticky top-0 shadow-sm z-10">
+                        <tr>
+                            <th class="px-6 py-3">Filename</th>
+                            <th class="px-6 py-3">Date</th>
+                            <th class="px-6 py-3">Size</th>
+                            <th class="px-6 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white">
+                        <tr v-for="file in backups" :key="file.filename" class="hover:bg-slate-50">
+                            <td class="px-6 py-3 font-medium text-slate-700">{{ file.filename }}</td>
+                            <td class="px-6 py-3 text-slate-500">{{ formatDate(file.date) }}</td>
+                            <td class="px-6 py-3 text-slate-500 font-mono">{{ formatSize(file.size) }}</td>
+                            <td class="px-6 py-3 text-right space-x-3">
+                                <button @click="restoreBackup(file.filename)" class="text-teal-600 hover:text-teal-800 font-bold hover:underline" title="Restore this backup">
+                                    <i class="fa-solid fa-history mr-1"></i> Restore
+                                </button>
+                                <button @click="deleteBackup(file.filename)" class="text-rose-500 hover:text-rose-700 font-bold hover:underline" title="Delete this backup">
+                                    <i class="fa-solid fa-trash-can mr-1"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                        <tr v-if="backups.length === 0">
+                            <td colspan="4" class="px-6 py-12 text-center text-slate-400">
+                                <i class="fa-solid fa-database text-4xl mb-3 block opacity-20"></i>
+                                No backups found.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="bg-slate-50 px-6 py-4 flex justify-end shrink-0 border-t border-slate-100">
+                <button @click="showBackupModal = false" class="px-4 py-2 text-slate-600 font-bold hover:text-slate-800 transition-colors">Close</button>
             </div>
         </div>
     </div>

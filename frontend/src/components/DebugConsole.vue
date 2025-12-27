@@ -3,6 +3,7 @@ import { useDebugStore } from '../stores/debug'
 import { storeToRefs } from 'pinia'
 import { ref } from 'vue'
 
+const IS_DEV = import.meta.env.DEV // True in dev, false in build
 const debugStore = useDebugStore()
 const { logs, isVisible } = storeToRefs(debugStore)
 const expandedLog = ref(null)
@@ -22,7 +23,7 @@ const getTypeColor = (type) => {
 </script>
 
 <template>
-    <div class="fixed bottom-4 right-4 z-[9999] flex flex-col items-end pointer-events-none">
+    <div v-if="IS_DEV" class="fixed bottom-4 right-4 z-[9999] flex flex-col items-end pointer-events-none">
         <!-- Toggle Button -->
         <button 
             @click="debugStore.toggleVisibility()" 

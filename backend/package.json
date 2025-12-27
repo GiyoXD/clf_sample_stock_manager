@@ -1,6 +1,6 @@
 {
   "name": "sample-manager-backend",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "bin": "server.js",
   "main": "server.js",
   "scripts": {
@@ -16,5 +16,11 @@
   },
   "devDependencies": {
     "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "scripts": "node_modules/better-sqlite3/lib/**/*.js",
+    "assets": [
+      "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    ]
   }
 }

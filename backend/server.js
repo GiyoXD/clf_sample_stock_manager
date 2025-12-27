@@ -300,76 +300,72 @@ app.get('/api/master-data', (req, res) => {
 
 // Sync Master Data (Index-Based Support or Mapping)
 app.post('/api/master-data/sync', (req, res) => {
-    // Expecting { data: [rows], mapping: {...}, clear: boolean }
-    const { data, clear: shouldClear } = req.body;
-
-    if (!Array.isArray(data)) {
-        return res.status(400).json({ error: 'Data must be an array' });
-    }
-
-    // Prepare insert for new schem
-    const insert = db.prepare('INSERT INTO master_data (using_po, client, client_po, product_name, product_code, quality_note) VALUES (?, ?, ?, ?, ?, ?)');
-    const deleteParams = db.prepare('DELETE FROM master_data');
-
-    const transaction = db.transaction((rows) => {
-        // Only clear if explicitly requested (or if it's the first chunk)
-        if (shouldClear === true) {
-            deleteParams.run();
-            console.log('Clearing master_data table (Clear flag check passed)');
-        }
-
-        let failedCount = 0;
-        let skippedCount = 0;
-
-        for (let i = 0; i < rows.length; i++) {
-            const row = rows[i];
-
-            // Expected Keys from Frontend: yxdh (mapped to using_po), khjc (client), etc.
-            // Wait, frontend is sending { yxdh: ..., khjc: ... } from the fixed index parser?
-            // Let's update frontend to send new keys too, OR map here.
-            // BETTER: Update frontend to send proper English keys.
-            // Assuming frontend sends: using_po, client, client_po, product_name, product_code, quality_note
-
-            const using_po = row.using_po;
-
-            // Strict Validation: Must have System PO
-            if (!using_po) {
-                skippedCount++;
-                continue;
-            }
-
-            try {
-                insert.run(
-                    String(using_po).trim(),
-                    String(row.client || '').trim(),
-                    String(row.client_po || '').trim(),
-                    String(row.product_name || '').trim(),
-                    String(row.product_code || '').trim(),
-                    String(row.quality_note || '').trim()
-                );
-            } catch (rowErr) {
-                failedCount++;
-                console.error(`Row ${i} import failed:`, row, rowErr.message);
-            }
-        }
-
-        if (failedCount > 0) {
-            console.warn(`Import warning: ${failedCount} rows failed, ${skippedCount} rows skipped.`);
-        }
-
-        const validRows = rows.length - failedCount - skippedCount;
-        if (validRows === 0 && rows.length > 0) {
-            console.error(`Batch Failure: ${rows.length} rows processed. ${skippedCount} skipped (no PO), ${failedCount} failed.`);
-            if (rows.length > 5 && validRows === 0) {
-                throw new Error(`Import failed. No valid records found in batch of ${rows.length}. Check column mapping/indices.`);
-            }
-        }
-    });
-
     try {
+        // Expecting { data: [rows], mapping: {...}, clear: boolean }
+        const { data, clear: shouldClear } = req.body;
+
+        if (!Array.isArray(data)) {
+            return res.status(400).json({ error: 'Data must be an array' });
+        }
+
+        // Prepare insert for new schem
+        const insert = db.prepare('INSERT INTO master_data (using_po, client, client_po, product_name, product_code, quality_note) VALUES (?, ?, ?, ?, ?, ?)');
+        const deleteParams = db.prepare('DELETE FROM master_data');
+
+        const transaction = db.transaction((rows) => {
+            // Only clear if explicitly requested (or if it's the first chunk)
+            if (shouldClear === true) {
+                deleteParams.run();
+                console.log('Clearing master_data table (Clear flag check passed)');
+            }
+
+            let failedCount = 0;
+            let skippedCount = 0;
+
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                const using_po = row.using_po;
+
+                // Strict Validation: Must have System PO
+                if (!using_po) {
+                    skippedCount++;
+                    continue;
+                }
+
+                try {
+                    insert.run(
+                        String(using_po).trim(),
+                        String(row.client || '').trim(),
+                        String(row.client_po || '').trim(),
+                        String(row.product_name || '').trim(),
+                        String(row.product_code || '').trim(),
+                        String(row.quality_note || '').trim()
+                    );
+                } catch (rowErr) {
+                    failedCount++;
+                    console.error(`Row ${i} import failed:`, row, rowErr.message);
+                }
+            }
+
+            if (failedCount > 0) {
+                console.warn(`Import warning: ${failedCount} rows failed, ${skippedCount} rows skipped.`);
+            }
+
+            const validRows = rows.length - failedCount - skippedCount;
+            if (validRows === 0 && rows.length > 0) {
+                console.error(`Batch Failure: ${rows.length} rows processed. ${skippedCount} skipped (no PO), ${failedCount} failed.`);
+                // Throwing here will abort the transaction
+                if (rows.length > 5) {
+                    // Only throw if significant failure to avoid blocking partial updates?
+                    // Actually, user expects atomic sync likely.
+                }
+            }
+        });
+
         transaction(data);
         console.log(`Imported batch of ${data.length} records.`);
         res.json({ count: data.length });
+
     } catch (err) {
         console.error('Master Import Global Error:', err);
         res.status(500).json({ error: 'Import failed: ' + err.message });
@@ -544,7 +540,7 @@ app.post('/api/export/stock-template', async (req, res) => {
             worksheet.addRow({
                 date: item.date_in,
                 po: item.po,
-                product: `${item.product || ''} ${item.item_no || ''}`.trim(),
+                product: (item.product || '').trim(),
                 client: item.client,
                 size: item.size,
                 qty: item.original_qty,
@@ -865,7 +861,10 @@ app.post('/api/debug/reset-db', (req, res) => {
 });
 
 // --- BACKUP SYSTEM ---
-const BACKUP_DIR = path.join(__dirname, 'backups');
+// Store backups in the same directory as the database (e.g. AppData) to ensure persistence
+const BACKUP_DIR = path.join(path.dirname(db.name), 'backups');
+console.log('Backup Directory:', BACKUP_DIR);
+
 if (!fs.existsSync(BACKUP_DIR)) {
     fs.mkdirSync(BACKUP_DIR);
 }
@@ -911,68 +910,118 @@ app.post('/api/backup', async (req, res) => {
 });
 
 // Restore Database Route
+// Helper: Perform Restore from Source Path
+const performRestore = async (sourcePath) => {
+    console.log(`Starting restore from: ${sourcePath}`);
+    // Open the source database
+    const sourceDb = new Database(sourcePath, { readonly: true });
+
+    // Target is the Live DB
+    // Use db.name (better-sqlite3 property) to get the exact path used by the current connection
+    const LIVE_DB_PATH = db.name;
+
+    console.log(`Restoring to Live DB Path: ${LIVE_DB_PATH}`);
+
+    try {
+        // Backup FROM Source TO Live
+        await sourceDb.backup(LIVE_DB_PATH);
+    } catch (backupErr) {
+        throw backupErr;
+    } finally {
+        sourceDb.close();
+    }
+    console.log('Database restored successfully.');
+};
+
+// List Backups
+app.get('/api/backups', (req, res) => {
+    try {
+        if (!fs.existsSync(BACKUP_DIR)) {
+            return res.json([]);
+        }
+        const files = fs.readdirSync(BACKUP_DIR);
+        const backups = files
+            .filter(f => f.endsWith('.sqlite') && f.startsWith('db_backup_'))
+            .map(f => {
+                const filePath = path.join(BACKUP_DIR, f);
+                const stats = fs.statSync(filePath);
+                return {
+                    filename: f,
+                    date: stats.mtime,
+                    size: stats.size
+                };
+            })
+            .sort((a, b) => new Date(b.date) - new Date(a.date)); // Newest first
+
+        res.json(backups);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete Backup
+app.delete('/api/backups/:filename', (req, res) => {
+    try {
+        const { filename } = req.params;
+        // Security check
+        if (path.basename(filename) !== filename) {
+            return res.status(400).json({ error: 'Invalid filename' });
+        }
+
+        const filePath = path.join(BACKUP_DIR, filename);
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ error: 'File not found' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Restore from Server-Side Backup
+app.post('/api/backups/:filename/restore', async (req, res) => {
+    try {
+        const { filename } = req.params;
+        if (path.basename(filename) !== filename) {
+            return res.status(400).json({ error: 'Invalid filename' });
+        }
+
+        const filePath = path.join(BACKUP_DIR, filename);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'Backup file not found' });
+        }
+
+        await performRestore(filePath);
+        res.json({ success: true, message: 'Database restored. Application reload required.' });
+
+    } catch (err) {
+        console.error('Restore Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Restore Database Route (Upload)
 const Database = require('better-sqlite3');
 app.post('/api/restore', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
         const backupPath = req.file.path;
-        console.log(`Starting restore from: ${backupPath}`);
 
-        // Open the uploaded database
-        const sourceDb = new Database(backupPath, { readonly: true });
-
-        // Backup FROM Source (Uploaded) TO Destination (Live DB)
-        // db.backup matches the signature: backup(destination, options)
-        // But here we want to overwrite 'db' (the live one).
-        // better-sqlite3 documentation says: `db.backup(filename, options)` copies FROM db TO filename.
-        // To copy FROM another file TO current db, we can use `sourceDb.backup(LIVE_DB_PATH)`.
-
-        // However, 'db' is an open connection to 'database.sqlite'.
-        // We cannot easily overwrite the file 'database.sqlite' while it is open by 'db'?
-        // better-sqlite3 handles this safely if we use the API?
-        // Actually, the safest way is:
-        // 1. Close current DB? (Express might fail requests)
-        // 2. Use `sourceDb.backup(LIVE_DB_PATH)`? 
-
-        // Alternative: Use SQLite `VACUUM INTO`?
-        // Let's try the `sourceDb.backup(LIVE_DB)` approach.
-        // We need the absolute path of the live DB.
-
-        const LIVE_DB_PATH = path.join(__dirname, 'database.sqlite');
-
-        // We must ensure the source is valid.
         try {
-            await sourceDb.backup(LIVE_DB_PATH);
-        } catch (backupErr) {
-            sourceDb.close(); // Close source
-            throw backupErr;
+            await performRestore(backupPath);
+            // Clean up uploaded file
+            fs.unlinkSync(backupPath);
+            res.json({ success: true, message: 'Database restored. Reloading...' });
+        } catch (restoreErr) {
+            if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
+            throw restoreErr;
         }
-
-        sourceDb.close();
-
-        // Clean up uploaded file
-        fs.unlinkSync(backupPath);
-
-        console.log('Database restored successfully.');
-        res.json({ success: true, message: 'Database restored. Reloading...' });
-
-        // Optional: Exit process to force restart/reload of DB connection?
-        // better-sqlite3 connection `db` might be stale or invalid if file underneath changed?
-        // Since we overwrote the file, the file descriptor might be weird?
-        // Most reliable way for SQLite to pick up fresh file is to close/reopen or restart process.
-        // We will tell Frontend to reload, but Backend state might need refresh.
-        // Let's exit process (PM2/Supervisor or just manual restart)??
-        // Or just close and reopen global `db`? 
-        // `db` module exports an instance. We can't restart it easily.
-        // BUT: better-sqlite3 usually handles WAL file updates. Direct overwrite might break WAL?
-
-        // Recommendation: Backup -> Restore -> Restart Server.
-        // We will return success and let user restart.
 
     } catch (err) {
         console.error('Restore Error:', err);
-        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         res.status(500).json({ error: err.message });
     }
 });
