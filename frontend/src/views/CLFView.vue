@@ -73,11 +73,11 @@ const exportToCsv = () => {
         headers.join(','),
         ...filteredStock.value.map(item => {
             return [
-                `"${(item.item_no || item.itemNo || '').replace(/"/g, '""')}"`,
+                `"${String(item.item_no || item.itemNo || '').replace(/"/g, '""')}"`,
                 "",
                 "",
-                `"${(item.po || '').replace(/"/g, '""')}"`,
-                `"${(item.product || '').replace(/"/g, '""')}"`,
+                `"${String(item.po || '').replace(/"/g, '""')}"`,
+                `"${String(item.product || '').replace(/"/g, '""')}"`,
                 `"${formatDate(item.date_in || item.dateIn)}"`,
                 "",
                 `"${getPcsInfo(item).replace(/"/g, '""')}"`
