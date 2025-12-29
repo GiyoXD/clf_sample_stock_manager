@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 import { useRouter } from 'vue-router'
 import ImportModal from '../components/ImportModal.vue'
@@ -23,6 +23,34 @@ const filters = ref({
 onMounted(() => {
     store.fetchAll()
 })
+
+// Pagination State
+const currentPage = ref(1)
+const itemsPerPage = 300
+
+const paginatedStock = computed(() => {
+    const start = (currentPage.value - 1) * itemsPerPage
+    const end = start + itemsPerPage
+    return filteredStock.value.slice(start, end)
+})
+
+const totalPages = computed(() => {
+    return Math.ceil(filteredStock.value.length / itemsPerPage)
+})
+
+const nextPage = () => {
+    if (currentPage.value < totalPages.value) {
+        currentPage.value++
+    }
+}
+
+const prevPage = () => {
+    if (currentPage.value > 1) {
+        currentPage.value--
+    }
+}
+
+
 
 const filteredStock = computed(() => {
     let result = store.currentInventory
@@ -66,6 +94,11 @@ const filteredStock = computed(() => {
     }
     
     return result
+})
+
+// Watch for filter changes to reset pagination
+watch(filteredStock, () => {
+    currentPage.value = 1
 })
 
 
@@ -328,7 +361,7 @@ const formatDateTime = (dateStr) => {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 text-slate-700">
-                    <tr v-for="item in filteredStock" :key="item.id" :class="selected.includes(item.id) ? 'bg-indigo-50' : 'even:bg-gray-100 hover:bg-gray-200 transition-colors'">
+                    <tr v-for="item in paginatedStock" :key="item.id" :class="selected.includes(item.id) ? 'bg-indigo-50' : 'even:bg-gray-100 hover:bg-gray-200 transition-colors'">
                         <td class="px-6 py-3">
                             <input type="checkbox" v-model="selected" :value="item.id" class="w-5 h-5 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </td>
@@ -372,6 +405,32 @@ const formatDateTime = (dateStr) => {
             </table>
             <div v-if="store.currentInventory.length === 0" class="p-8 text-center text-slate-400">
                 No items in inventory. Go to "Stock In" to add items.
+            </div>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div v-if="totalPages > 1" class="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <div class="text-sm text-slate-500">
+                Showing <span class="font-bold">{{ (currentPage - 1) * itemsPerPage + 1 }}</span> to <span class="font-bold">{{ Math.min(currentPage * itemsPerPage, filteredStock.length) }}</span> of <span class="font-bold">{{ filteredStock.length }}</span> results
+            </div>
+            <div class="flex space-x-2">
+                <button 
+                    @click="prevPage" 
+                    :disabled="currentPage === 1"
+                    class="px-3 py-1 rounded border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Previous
+                </button>
+                <div class="flex items-center space-x-1">
+                    <span class="text-sm text-slate-600">Page {{ currentPage }} of {{ totalPages }}</span>
+                </div>
+                <button 
+                    @click="nextPage" 
+                    :disabled="currentPage === totalPages"
+                    class="px-3 py-1 rounded border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Next
+                </button>
             </div>
         </div>
 

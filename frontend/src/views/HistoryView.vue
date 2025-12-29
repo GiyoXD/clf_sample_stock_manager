@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 import ImportModal from '../components/ImportModal.vue'
 
@@ -21,6 +21,35 @@ const filters = ref({
 onMounted(() => {
     store.fetchAll()
 })
+
+// Pagination State
+const currentPage = ref(1)
+const itemsPerPage = 300
+
+const paginatedHistory = computed(() => {
+    // filteredHistory is already sorted
+    const start = (currentPage.value - 1) * itemsPerPage
+    const end = start + itemsPerPage
+    return filteredHistory.value.slice(start, end)
+})
+
+const totalPages = computed(() => {
+    return Math.ceil(filteredHistory.value.length / itemsPerPage)
+})
+
+const nextPage = () => {
+    if (currentPage.value < totalPages.value) {
+        currentPage.value++
+    }
+}
+
+const prevPage = () => {
+    if (currentPage.value > 1) {
+        currentPage.value--
+    }
+}
+
+
 
 const filteredHistory = computed(() => {
     let result = store.shipments
@@ -75,6 +104,11 @@ const filteredHistory = computed(() => {
 
     // Sort Descending Date
     return [...result].sort((a,b) => new Date(b.date_sent) - new Date(a.date_sent))
+})
+
+// Watch filters to reset page
+watch(filteredHistory, () => {
+    currentPage.value = 1
 })
 
 const getImageUrl = (path) => {
@@ -284,7 +318,7 @@ const handleImportSuccess = () => {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    <tr v-for="ship in filteredHistory" :key="ship.id" :class="selected.includes(ship.id) ? 'bg-rose-50' : 'even:bg-gray-100 hover:bg-gray-200 transition-colors'">
+                    <tr v-for="ship in paginatedHistory" :key="ship.id" :class="selected.includes(ship.id) ? 'bg-rose-50' : 'even:bg-gray-100 hover:bg-gray-200 transition-colors'">
                         <td class="px-6 py-3">
                             <input type="checkbox" v-model="selected" :value="ship.id" class="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 cursor-pointer">
                         </td>
@@ -318,6 +352,32 @@ const handleImportSuccess = () => {
             </table>
             <div v-if="filteredHistory.length === 0" class="p-6 text-center text-slate-400">
                 No matching shipment records found.
+            </div>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div v-if="totalPages > 1" class="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <div class="text-sm text-slate-500">
+                Showing <span class="font-bold">{{ (currentPage - 1) * itemsPerPage + 1 }}</span> to <span class="font-bold">{{ Math.min(currentPage * itemsPerPage, filteredHistory.length) }}</span> of <span class="font-bold">{{ filteredHistory.length }}</span> results
+            </div>
+            <div class="flex space-x-2">
+                <button 
+                    @click="prevPage" 
+                    :disabled="currentPage === 1"
+                    class="px-3 py-1 rounded border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Previous
+                </button>
+                <div class="flex items-center space-x-1">
+                    <span class="text-sm text-slate-600">Page {{ currentPage }} of {{ totalPages }}</span>
+                </div>
+                <button 
+                    @click="nextPage" 
+                    :disabled="currentPage === totalPages"
+                    class="px-3 py-1 rounded border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Next
+                </button>
             </div>
         </div>
     </div>
