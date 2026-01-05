@@ -8,6 +8,14 @@ const path = require('path');
 const fs = require('fs');
 
 // Configure Multer
+const logAction = (action, description) => {
+    try {
+        db.prepare("INSERT INTO audit_logs (action, description) VALUES (?, ?)").run(action, description);
+    } catch (e) {
+        console.error("Failed to log action:", e);
+    }
+};
+
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const uploadDir = 'uploads/';
@@ -66,6 +74,7 @@ app.post('/api/inventory', (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         const info = stmt.run(po, client, clientPO, product, itemNo, batch, note, date, size, qtyNum, qtyNum);
+        logAction('STOCK_IN', `Added Stock: ${product} (PO: ${po})`);
         res.json({ id: info.lastInsertRowid, ...req.body });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -96,7 +105,11 @@ app.put('/api/inventory/:id', (req, res) => {
             WHERE id = ?
         `);
         // If PO is empty, use empty string to satisfy NOT NULL
-        stmt.run(originalQty, newCurrent, note, po || "", product, itemNo, id);
+        const info = stmt.run(originalQty, newCurrent, note, po || "", product, itemNo, id);
+
+        if (info.changes > 0) {
+            logAction('UPDATE', `Updated Stock ID ${id}: ${product} (PO: ${po})`);
+        }
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -109,7 +122,11 @@ app.put('/api/inventory/:id', (req, res) => {
 app.delete('/api/inventory/:id', (req, res) => {
     try {
         const { id } = req.params;
+        const item = db.prepare('SELECT po, product FROM inventory WHERE id = ?').get(id);
+        const desc = item ? `${item.product} (PO: ${item.po})` : `ID ${id}`;
+
         db.prepare("UPDATE inventory SET deleted_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+        logAction('DELETE', `Soft-deleted Stock: ${desc}`);
         res.json({ success: true });
     } catch (err) {
         const errorLog = `[${new Date().toISOString()}] Delete Error: ${err.message}\nStack: ${err.stack}\n\n`;
@@ -122,7 +139,11 @@ app.delete('/api/inventory/:id', (req, res) => {
 app.post('/api/inventory/restore/:id', (req, res) => {
     try {
         const { id } = req.params;
+        const item = db.prepare('SELECT po, product FROM inventory WHERE id = ?').get(id);
+        const desc = item ? `${item.product} (PO: ${item.po})` : `ID ${id}`;
+
         db.prepare('UPDATE inventory SET deleted_at = NULL WHERE id = ?').run(id);
+        logAction('RESTORE', `Restored Stock: ${desc}`);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -134,6 +155,9 @@ app.post('/api/inventory/restore/:id', (req, res) => {
 app.delete('/api/inventory/trash/:id', (req, res) => {
     try {
         const { id } = req.params;
+        const item = db.prepare('SELECT po, product FROM inventory WHERE id = ?').get(id);
+        const desc = item ? `${item.product} (PO: ${item.po})` : `ID ${id}`;
+
         const transaction = db.transaction(() => {
             // Unlink shipments first (set stock_id to NULL) so we don't break FK
             // Or should we delete them? User said "Delete Forever". 
@@ -143,6 +167,7 @@ app.delete('/api/inventory/trash/:id', (req, res) => {
             db.prepare('DELETE FROM inventory WHERE id = ?').run(id);
         });
         transaction();
+        logAction('HARD_DELETE', `Permanently Deleted Stock: ${desc}`);
         res.json({ success: true });
     } catch (err) {
         const errorLog = `[${new Date().toISOString()}] Hard Delete Inventory Error: ${err.message}\nStack: ${err.stack}\n\n`;
@@ -179,8 +204,8 @@ app.post('/api/shipments', (req, res) => {
     const { items, dateSent, imagePath } = req.body; // items has .qty now
 
     const insertShipment = db.prepare(`
-        INSERT INTO shipments (stock_id, po, client, product, recipient, courier, tracking, date_sent, image_path, qty, size)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO shipments (stock_id, po, client, product, recipient, courier, tracking, date_sent, image_path, qty, size, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Use >= qty, and deduct qty
@@ -213,8 +238,10 @@ app.post('/api/shipments', (req, res) => {
                 dateSent,
                 imagePath || null,
                 qty,
-                item.size || ''
+                item.size || '',
+                item.note || ''
             );
+            logAction('SHIP', `Shipped ${qty} of ${item.product} (PO: ${item.po}) to ${item.recipient}`);
         }
     });
 
@@ -240,6 +267,8 @@ app.delete('/api/shipments/:id', (req, res) => {
         // Hard Delete (Undo) - User request: don't put in trash
         db.prepare("DELETE FROM shipments WHERE id = ?").run(id);
 
+        logAction('REVERT', `Reverted Shipment ID ${id} (PO: ${shipment.po}, Product: ${shipment.product})`);
+
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -251,6 +280,7 @@ app.post('/api/shipments/trash/:id', (req, res) => {
     try {
         const { id } = req.params;
         db.prepare("UPDATE shipments SET deleted_at = DATETIME('now') WHERE id = ?").run(id);
+        logAction('DELETE', `Soft-deleted Shipment ID ${id}`);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -280,6 +310,7 @@ app.post('/api/shipments/restore/:id', (req, res) => {
         db.prepare('UPDATE inventory SET current_qty = current_qty - ? WHERE id = ?').run(qty, shipment.stock_id);
 
         db.prepare('UPDATE shipments SET deleted_at = NULL WHERE id = ?').run(id);
+        logAction('RESTORE', `Restored Shipment ID ${id}`);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -291,6 +322,7 @@ app.delete('/api/shipments/trash/:id', (req, res) => {
     try {
         const { id } = req.params;
         db.prepare('DELETE FROM shipments WHERE id = ?').run(id);
+        logAction('HARD_DELETE', `Hard-deleted Shipment ID ${id}`);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -404,6 +436,26 @@ app.post('/api/clf-data/sync', (req, res) => {
     }
 });
 
+// --- Audit Logs ---
+app.get('/api/logs', (req, res) => {
+    try {
+        const logs = db.prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 1000").all();
+        res.json(logs);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/logs', (req, res) => {
+    try {
+        db.prepare("DELETE FROM audit_logs").run();
+        logAction('RESET_LOGS', 'Cleared all audit logs');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // --- Upload API ---
 app.post('/api/upload', upload.single('file'), (req, res) => {
     try {
@@ -412,30 +464,6 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
         }
         // Return the path relative to server root
         res.json({ path: req.file.path.replace(/\\/g, '/') }); // Normalize slashes
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// --- Image Cleanup API ---
-app.delete('/api/cleanup-images', (req, res) => {
-    try {
-        const uploadDir = path.join(__dirname, 'uploads');
-        if (!fs.existsSync(uploadDir)) return res.json({ deleted: 0 });
-
-        const files = fs.readdirSync(uploadDir);
-        const shipments = db.prepare('SELECT image_path FROM shipments WHERE image_path IS NOT NULL AND deleted_at IS NULL').all();
-        const usedImages = new Set(shipments.map(s => path.basename(s.image_path)));
-
-        let deletedCount = 0;
-        files.forEach(file => {
-            if (!usedImages.has(file)) {
-                fs.unlinkSync(path.join(uploadDir, file));
-                deletedCount++;
-            }
-        });
-
-        res.json({ success: true, deleted: deletedCount });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -606,7 +634,8 @@ app.post('/api/export/history-template', async (req, res) => {
             { header: '数量', key: 'qty', width: 10 },
             { header: '收件人', key: 'recipient', width: 20 },
             { header: '快递', key: 'courier', width: 15 },
-            { header: '单号', key: 'tracking', width: 20 }
+            { header: '单号', key: 'tracking', width: 20 },
+            { header: 'Note', key: 'note', width: 25 }
         ];
 
         // Style Headers
@@ -625,7 +654,8 @@ app.post('/api/export/history-template', async (req, res) => {
                 qty: item.qty,
                 recipient: item.recipient,
                 courier: item.courier,
-                tracking: item.tracking
+                tracking: item.tracking,
+                note: item.note
             });
         });
 
@@ -831,8 +861,6 @@ app.post('/api/import/execute', memoryUpload.single('file'), async (req, res) =>
                         // Actually, shipment record has `stock_id`. If we confirm migration, maybe we can't link to real stock easily.
                         // For legacy import, maybe set stock_id to NULL or 0?
                         // The schema requires `stock_id`.
-                        // Workaround: Create a "Legacy Stock" item? or Allow NULL?
-                        // Let's check schema. `stock_id INTEGER` usually allows NULL unless NOT NULL specified.
                         // If strict, we might have issues. Let's try NULL.
 
                         db.prepare(`

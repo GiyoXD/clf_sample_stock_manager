@@ -139,6 +139,7 @@ const batchRemove = () => {
                             <th class="px-4 py-3 w-16">Qty</th>
                             <th class="px-4 py-3">Courier</th>
                             <th class="px-4 py-3">Tracking No</th>
+                            <th class="px-4 py-3">Note</th>
                             <th class="px-4 py-3 w-10"></th>
                         </tr>
                     </thead>
@@ -193,6 +194,9 @@ const batchRemove = () => {
                             </td>
                             <td class="px-4 py-3">
                                 <input v-model="dItem.tracking" placeholder="Tracking #" class="w-full border-b border-dotted border-slate-300 focus:border-teal-500 outline-none py-1 bg-transparent font-mono">
+                            </td>
+                            <td class="px-4 py-3">
+                                <input v-model="dItem.note" placeholder="Note..." class="w-full border-b border-dotted border-slate-300 focus:border-teal-500 outline-none py-1 bg-transparent">
                             </td>
                             <td class="px-4 py-3 text-center">
                                 <button @click="removeFromDraft(idx)" class="text-rose-400 hover:text-rose-600">

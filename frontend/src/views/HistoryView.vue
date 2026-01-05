@@ -15,7 +15,8 @@ const filters = ref({
     po: '',
     product: '',
     recipient: '',
-    tracking: ''
+    tracking: '',
+    note: ''
 })
 
 onMounted(() => {
@@ -100,6 +101,12 @@ const filteredHistory = computed(() => {
             (s.courier || '').toLowerCase().includes(query) ||
             (s.recipient || '').toLowerCase().includes(query)
         )
+    }
+
+    // Filter by Note
+    if (filters.value.note && filters.value.note.trim()) {
+        const query = filters.value.note.trim().toLowerCase()
+        result = result.filter(s => (s.note || '').toLowerCase().includes(query))
     }
 
     // Sort Descending Date
@@ -263,7 +270,7 @@ const handleImportSuccess = () => {
                     </button>
                 </div>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">Date Range (Sent)</label>
                     <div class="flex space-x-2">
@@ -289,13 +296,17 @@ const handleImportSuccess = () => {
                     <input type="text" v-model="filters.product" placeholder="Search Product..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
                 <div>
-                     <label class="block text-xs font-bold text-slate-400 mb-1">Recipient / Tracking</label>
+                    <label class="block text-xs font-bold text-slate-400 mb-1">Recipient / Tracking</label>
                     <input type="text" v-model="filters.tracking" placeholder="Search Recipient or Tracking..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                </div>
+                <div>
+                     <label class="block text-xs font-bold text-slate-400 mb-1">Note</label>
+                    <input type="text" v-model="filters.note" placeholder="Search Note..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                 </div>
             </div>
             <!-- Clear Filters Button if any active -->
-            <div v-if="filters.dateStart || filters.dateEnd || filters.po || filters.product || filters.client || filters.recipient" class="mt-2 text-right">
-                <button @click="filters = { dateStart: '', dateEnd: '', po: '', client: '', product: '', recipient: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
+            <div v-if="filters.dateStart || filters.dateEnd || filters.po || filters.product || filters.client || filters.recipient || filters.note" class="mt-2 text-right">
+                <button @click="filters = { dateStart: '', dateEnd: '', po: '', client: '', product: '', recipient: '', note: '' }" class="text-xs text-rose-500 hover:underline">Clear Filters</button>
             </div>
         </div>
 
@@ -314,6 +325,7 @@ const handleImportSuccess = () => {
                         <th class="px-4 py-3 text-center">Qty</th>
                         <th class="px-6 py-3">Recipient</th>
                         <th class="px-6 py-3">Logistics</th>
+                        <th class="px-6 py-3">Note</th>
                         <th class="px-6 py-3 text-right">Action</th>
                     </tr>
                 </thead>
@@ -342,6 +354,7 @@ const handleImportSuccess = () => {
                                 </div>
                             </div>
                         </td>
+                        <td class="px-6 py-3 text-xs text-slate-500 max-w-xs truncate" :title="ship.note">{{ ship.note }}</td>
                         <td class="px-6 py-3 text-right">
                             <button @click="revertShipment(ship)" class="text-rose-500 hover:text-rose-700 text-xs font-bold border border-rose-200 hover:bg-rose-50 px-2 py-1 rounded transition-colors">
                                 Revert & Restore Stock

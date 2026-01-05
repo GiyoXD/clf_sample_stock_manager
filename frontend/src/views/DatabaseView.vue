@@ -118,13 +118,23 @@ const handleFileImport = (event, type) => {
     // 24: quality_note (zlyq)
     // 11: product_code (cpmc) - Index 11 (Col 12)
     
+    const isCsv = file.name.toLowerCase().endsWith('.csv');
     const reader = new FileReader()
     reader.onload = async (e) => {
         try {
-            const data = new Uint8Array(e.target.result)
-            const wb = XLSX.read(data, { type: 'array' })
+            let wb;
+            if (isCsv) {
+                // CSV special handling: Read as String to enforce raw text parsing
+                wb = XLSX.read(e.target.result, { type: 'string', raw: true, cellDates: false });
+            } else {
+                // Excel handling: Read as Binary Array
+                const data = new Uint8Array(e.target.result)
+                wb = XLSX.read(data, { type: 'array', raw: true, cellDates: false });
+            }
+            
             // Use header: 1 to get Array of Arrays
-            const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 })
+            // raw: true ensures we get the raw value (string in CSV), ignoring any Excel number formats if present
+            const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' })
             
             if (rows.length === 0) {
                 return showNotification('File is empty', 'error')
@@ -138,7 +148,7 @@ const handleFileImport = (event, type) => {
             // Start from row 1 (index 1) to skip header, or row 0 if no header?
             // Usually Row 1 is header. Let's try to detect header at 0.
             let startIndex = 0;
-            if (String(rows[0][1]).includes('using_po') || String(rows[0][1]).includes('的任务单号')) {
+            if (rows[0] && (String(rows[0][1]).includes('using_po') || String(rows[0][1]).includes('的任务单号'))) {
                 startIndex = 1; 
             }
 
@@ -178,7 +188,12 @@ const handleFileImport = (event, type) => {
         // Reset input
         event.target.value = ''
     }
-    reader.readAsArrayBuffer(file)
+    
+    if (isCsv) {
+        reader.readAsText(file);
+    } else {
+        reader.readAsArrayBuffer(file)
+    }
 }
 
 // Direct Import (Bypasses Mapping Modal)
@@ -396,6 +411,37 @@ const formatSize = (bytes) => {
 const formatDate = (dateStr) => {
     return new Date(dateStr).toLocaleString()
 }
+
+// --- Audit Log Logic ---
+const logs = ref([])
+const showLogModal = ref(false)
+
+const openLogModal = async () => {
+    await fetchLogs()
+    showLogModal.value = true
+}
+
+const fetchLogs = async () => {
+    try {
+        const res = await axios.get('/api/logs')
+        logs.value = res.data
+    } catch (e) {
+        console.error(e)
+        showNotification('Failed to fetch logs', 'error')
+    }
+}
+
+const clearLogs = async () => {
+    if (!confirm('Are you sure you want to clear ALL audit logs?\n\nThis cannot be undone.')) return
+    try {
+        await axios.delete('/api/logs')
+        fetchLogs() // Refresh (will be empty)
+        showNotification('All logs cleared', 'success')
+    } catch (e) {
+        showNotification('Failed to clear logs: ' + e.message, 'error')
+    }
+}
+
 </script>
 
 <template>
@@ -522,6 +568,20 @@ const formatDate = (dateStr) => {
                 <button @click="showResetModal = true" class="flex-1 bg-white border-2 border-slate-200 hover:border-rose-500 hover:bg-rose-50 text-slate-600 hover:text-rose-600 font-bold py-4 rounded-xl transition-all flex flex-col items-center justify-center">
                     <i class="fa-solid fa-bomb text-3xl mb-2 text-rose-500"></i>
                     <span>Reset Database</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Audit Logs Section -->
+        <div class="bg-white p-8 rounded-xl shadow-lg border-t-4 border-slate-600">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 flex items-center">
+                <i class="fa-solid fa-clipboard-list text-slate-600 mr-3"></i> 
+                Audit Logs
+            </h2>
+            <div class="flex space-x-4">
+                <button @click="openLogModal" class="flex-1 bg-white border-2 border-slate-200 hover:border-slate-600 hover:text-slate-700 text-slate-600 font-bold py-4 rounded-xl transition-all flex flex-col items-center justify-center">
+                    <i class="fa-solid fa-eye text-3xl mb-2 text-slate-500"></i>
+                    <span>View Transaction Logs</span>
                 </button>
             </div>
         </div>
@@ -767,6 +827,64 @@ const formatDate = (dateStr) => {
 
             <div class="bg-slate-50 px-6 py-4 flex justify-end shrink-0 border-t border-slate-100">
                 <button @click="showBackupModal = false" class="px-4 py-2 text-slate-600 font-bold hover:text-slate-800 transition-colors">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Audit Log Modal -->
+    <div v-if="showLogModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden animate-[fade-in_0.2s_ease-out] flex flex-col max-h-[85vh]">
+            <div class="bg-slate-700 px-6 py-4 flex justify-between items-center shrink-0">
+                <h3 class="text-xl font-bold text-white"><i class="fa-solid fa-clipboard-list mr-2"></i> Transaction Audit Logs</h3>
+                <div class="flex items-center space-x-4">
+                    <button @click="clearLogs" class="bg-rose-500 hover:bg-rose-600 text-white px-3 py-1 rounded text-xs font-bold transition-colors">
+                        <i class="fa-solid fa-trash mr-1"></i> Clear Logs
+                    </button>
+                    <button @click="showLogModal = false" class="text-white hover:text-slate-300 transition-colors">
+                        <i class="fa-solid fa-times text-xl"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="overflow-auto p-0 flex-1">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase sticky top-0 shadow-sm z-10">
+                        <tr>
+                            <th class="px-6 py-3 w-48">Time</th>
+                            <th class="px-6 py-3 w-32">Action</th>
+                            <th class="px-6 py-3">Description</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white">
+                        <tr v-for="log in logs" :key="log.id" class="hover:bg-slate-50">
+                            <td class="px-6 py-3 text-slate-500 font-mono text-xs whitespace-nowrap">{{ formatDate(log.timestamp) }}</td>
+                            <td class="px-6 py-3">
+                                <span :class="{
+                                    'px-2 py-1 rounded-full text-xs font-bold': true,
+                                    'bg-teal-100 text-teal-800': log.action === 'STOCK_IN',
+                                    'bg-indigo-100 text-indigo-800': log.action === 'UPDATE',
+                                    'bg-amber-100 text-amber-800': log.action === 'REVERT' || log.action === 'RESTORE',
+                                    'bg-blue-100 text-blue-800': log.action === 'SHIP',
+                                    'bg-rose-100 text-rose-800': log.action.includes('DELETE')
+                                }">
+                                    {{ log.action }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-3 text-slate-700">{{ log.description }}</td>
+                        </tr>
+                        <tr v-if="logs.length === 0">
+                            <td colspan="3" class="px-6 py-12 text-center text-slate-400">
+                                <i class="fa-solid fa-clipboard-check text-4xl mb-3 block opacity-20"></i>
+                                No logs found.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="bg-slate-50 px-6 py-4 flex justify-between items-center shrink-0 border-t border-slate-100">
+                <span class="text-xs text-slate-400">Showing last 1000 records</span>
+                <button @click="showLogModal = false" class="px-4 py-2 text-slate-600 font-bold hover:text-slate-800 transition-colors">Close</button>
             </div>
         </div>
     </div>

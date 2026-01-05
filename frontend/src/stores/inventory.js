@@ -186,7 +186,8 @@ export const useInventoryStore = defineStore('inventory', {
                     tracking: '',
                     qty: 1, // Default to 1 to send
                     maxQty: item.current_qty || item.currentQty || 0, // Store max available
-                    size: item.size || ''
+                    size: item.size || '',
+                    note: ''
                 });
             });
         },

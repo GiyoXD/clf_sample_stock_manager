@@ -224,6 +224,7 @@ const undoEntry = async (index, id) => {
                                 <option value="A3">A3</option>
                                 <option value="50*50">50*50</option>
                                 <option value="Whole Hide">Whole Hide</option>
+                                <option value="Half Hide">Half Hide</option>
                             </select>
                         </div>
                     </div>

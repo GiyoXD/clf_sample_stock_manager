@@ -120,6 +120,24 @@ const initDB = () => {
         // Column likely exists
     }
 
+    // Migration: Add note to shipments
+    try {
+        db.exec("ALTER TABLE shipments ADD COLUMN note TEXT");
+        console.log("Migrated: Added note column to shipments.");
+    } catch (e) {
+        // Column likely exists
+    }
+
+    // Audit Logs Table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT,
+            description TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
     // CLF Data Table (Cached from parsing)
     db.exec(`
         CREATE TABLE IF NOT EXISTS clf_data (
