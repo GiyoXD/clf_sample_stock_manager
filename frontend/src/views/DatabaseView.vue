@@ -91,16 +91,44 @@ const handleFileImport = (event, type) => {
     if (!file) return
 
     // For CLF, do direct import (Legacy/Simple)
+    // For CLF, do direct import with Index Mapping (v2.2)
+    // Col B (1): Client PO (PO)
+    // Col E (4): Batch (批次)
+    // Col F (5): Order Qty (订单数量/Scale)
+    // Col G (6): TTX PO (TTX单号 - Search Key)
+    // Col K (10): Pieces (Pieces)
     if (type === 'clf') {
         const reader = new FileReader()
         reader.onload = async (e) => {
             try {
                 const data = new Uint8Array(e.target.result)
                 const wb = XLSX.read(data, { type: 'array' })
-                const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
-                await store.syncClfData(json)
-                showNotification(`CLF Data Imported: ${json.length} records`)
+                const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+                
+                // Skip header (row 0)
+                const cleanData = []
+                for (let i = 1; i < rows.length; i++) {
+                    const r = rows[i]
+                    if (!r || r.length < 7) continue; // Basic check
+
+                    // Search Key (TTX PO) is critical
+                    const ttxPo = String(r[6] || '').trim();
+                    if (!ttxPo) continue;
+
+                    cleanData.push({
+                        ttx_po: ttxPo,
+                        client_po: String(r[1] || '').trim(),
+                        batch: String(r[4] || '').trim(),
+                        // Remove commas before parsing int
+                        order_qty: parseInt(String(r[5] || '0').replace(/,/g, '')) || 0,
+                        pieces: String(r[10] || '').trim()
+                    })
+                }
+
+                await store.syncClfData(cleanData)
+                showNotification(`CLF Data Imported: ${cleanData.length} records`)
             } catch (err) {
+                console.error(err)
                 const msg = err.response?.data?.error || err.message
                 showNotification('Error: ' + msg, 'error')
             }

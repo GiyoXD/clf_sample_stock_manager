@@ -8,14 +8,14 @@ const searchPO = ref('')
 const duplicates = ref([])
 const relatedPOs = ref([])
 const recentEntries = ref([])
+const clfMatch = ref(null) // New ref to hold CLF data separately
 const form = ref({
     po: '',
     client: '',
     clientPO: '',
     product: '',
     itemNo: '',
-    batch: '',
-    note: '',
+    itemNo: '',
     note: '',
     date: (() => {
         const now = new Date();
@@ -40,7 +40,10 @@ const handleSearch = () => {
     const masterRecord = store.masterData.find(r => String(r.using_po || '').toLowerCase() === searchKey)
     
     // Search CLF Data
-    const clfRecord = store.clfData.find(r => String(r['TTX单号'] || '').toLowerCase() === searchKey)
+    // standard key: ttx_po, fallback: TTX单号
+    const clfRecord = store.clfData.find(r => 
+        String(r.ttx_po || r['TTX单号'] || '').toLowerCase() === searchKey
+    )
 
     if (!masterRecord && !clfRecord) {
         alert('PO not found in database. Please enter details manually.')
@@ -48,17 +51,32 @@ const handleSearch = () => {
         form.value = {
             ...form.value,
             po: searchPO.value.toUpperCase(),
-            client: '', clientPO: '', product: '', itemNo: '', batch: '', note: ''
+            client: '', clientPO: '', product: '', itemNo: '', note: ''
         }
+        clfMatch.value = null
     } else {
-        form.value.po = masterRecord ? masterRecord.using_po : (clfRecord ? clfRecord['TTX单号'] : searchKey.toUpperCase())
+        // Master Data Fields
+        form.value.po = masterRecord ? masterRecord.using_po : (clfRecord ? (clfRecord.ttx_po || clfRecord['TTX单号']) : searchKey.toUpperCase())
         form.value.client = masterRecord ? masterRecord.client : ''
         form.value.product = masterRecord ? masterRecord.product_name : ''
         form.value.itemNo = masterRecord ? masterRecord.product_code : ''
-        form.value.note = '' // User requested empty note by default
+        form.value.note = '' 
         
-        form.value.batch = clfRecord ? clfRecord['批次'] : ''
-        form.value.clientPO = masterRecord ? masterRecord.client_po : (clfRecord ? clfRecord['PO'] : '')
+        // Client PO from Master or CLF
+        form.value.clientPO = masterRecord ? masterRecord.client_po : (clfRecord ? (clfRecord.client_po || clfRecord['PO']) : '')
+
+        // Separate CLF Data (No Auto-Fill)
+        if (clfRecord) {
+            clfMatch.value = {
+                ttx_po: clfRecord.ttx_po || clfRecord['TTX单号'],
+                batch: clfRecord.batch || clfRecord['批次'],
+                client_po: clfRecord.client_po || clfRecord['PO'], // Add Client PO
+                order_qty: clfRecord.order_qty || 0,
+                pieces: clfRecord.pieces || ''
+            }
+        } else {
+            clfMatch.value = null
+        }
     }
 
     // Check Duplicates
@@ -121,6 +139,36 @@ const undoEntry = async (index, id) => {
 
 <template>
     <div class="space-y-6">
+        <!-- New CLF Match Box -->
+        <div v-if="clfMatch" class="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-r-md shadow-sm">
+            <div class="flex justify-between items-start">
+                <div class="flex items-center text-emerald-800 font-bold mb-2">
+                    <i class="fa-solid fa-check-circle mr-2"></i> CLF Match Found
+                </div>
+                <div class="text-xs text-emerald-600 bg-white px-2 py-1 rounded border border-emerald-200">
+                    TTX PO: {{ clfMatch.ttx_po }}
+                </div>
+            </div>
+            <div class="grid grid-cols-4 gap-4 text-sm mt-2">
+                <div>
+                    <span class="block text-xs font-bold text-emerald-600 uppercase">CLF Client PO</span>
+                    <span class="font-mono text-slate-700 font-bold">{{ clfMatch.client_po }}</span>
+                </div>
+                <div>
+                    <span class="block text-xs font-bold text-emerald-600 uppercase">Batch</span>
+                    <span class="font-mono text-slate-700">{{ clfMatch.batch }}</span>
+                </div>
+                <div>
+                    <span class="block text-xs font-bold text-emerald-600 uppercase">Order Scale</span>
+                    <span class="font-mono text-slate-700 font-bold">{{ clfMatch.order_qty }}</span>
+                </div>
+                <div>
+                    <span class="block text-xs font-bold text-emerald-600 uppercase">Pieces</span>
+                    <span class="font-mono text-slate-700">{{ clfMatch.pieces }}</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Search Section -->
         <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center">
@@ -194,10 +242,6 @@ const undoEntry = async (index, id) => {
                     <div class="col-span-1">
                         <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Item No</label>
                         <input v-model="form.itemNo" class="w-full bg-slate-50 border border-slate-200 rounded px-3 py-2 text-slate-700" readonly>
-                    </div>
-                    <div class="col-span-1">
-                        <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Batch</label>
-                        <input v-model="form.batch" class="w-full bg-slate-50 border border-slate-200 rounded px-3 py-2 text-slate-700" readonly>
                     </div>
                     <div class="col-span-2">
                         <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Quality Note (Editable)</label>

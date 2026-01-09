@@ -144,9 +144,27 @@ const initDB = () => {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ttx_po TEXT, -- PO
             batch TEXT,
-            client_po TEXT
+            client_po TEXT,
+            order_qty INTEGER,
+            pieces TEXT
         )
     `);
+
+    // Migration: Add order_qty to clf_data
+    try {
+        db.exec("ALTER TABLE clf_data ADD COLUMN order_qty INTEGER");
+        console.log("Migrated: Added order_qty column to clf_data.");
+    } catch (e) {
+        // Column likely exists
+    }
+
+    // Migration: Add pieces to clf_data
+    try {
+        db.exec("ALTER TABLE clf_data ADD COLUMN pieces TEXT");
+        console.log("Migrated: Added pieces column to clf_data.");
+    } catch (e) {
+        // Column likely exists
+    }
 
     // Couriers Table (Customizable)
     db.exec(`

@@ -417,16 +417,26 @@ app.get('/api/clf-data', (req, res) => {
 
 // Sync CLF Data (Replace)
 app.post('/api/clf-data/sync', (req, res) => {
-    const { data } = req.body; // Expecting rows with TTX单号, 批次, PO
-    const insert = db.prepare('INSERT INTO clf_data (ttx_po, batch, client_po) VALUES (?, ?, ?)');
+    const { data } = req.body; // Expecting rows from frontend
+    // Columns: ttx_po, batch, client_po, order_qty, pieces
+    const insert = db.prepare('INSERT INTO clf_data (ttx_po, batch, client_po, order_qty, pieces) VALUES (?, ?, ?, ?, ?)');
     const clear = db.prepare('DELETE FROM clf_data');
 
     const transaction = db.transaction((rows) => {
         clear.run();
         for (const row of rows) {
-            insert.run(row['TTX单号'] || row.ttx_po, row['批次'] || row.batch, row['PO'] || row.client_po);
+            // Support both old object keys (if any) and new standard keys
+            insert.run(
+                row.ttx_po,
+                row.batch,
+                row.client_po,
+                row.order_qty || 0,
+                row.pieces || ''
+            );
         }
     });
+
+
 
     try {
         transaction(data);
