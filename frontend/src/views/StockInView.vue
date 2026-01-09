@@ -56,14 +56,14 @@ const handleSearch = () => {
         clfMatch.value = null
     } else {
         // Master Data Fields
-        form.value.po = masterRecord ? masterRecord.using_po : (clfRecord ? (clfRecord.ttx_po || clfRecord['TTX单号']) : searchKey.toUpperCase())
+        form.value.po = clfRecord ? (clfRecord.ttx_po || clfRecord['TTX单号']) : (masterRecord ? masterRecord.using_po : searchKey.toUpperCase())
         form.value.client = masterRecord ? masterRecord.client : ''
         form.value.product = masterRecord ? masterRecord.product_name : ''
         form.value.itemNo = masterRecord ? masterRecord.product_code : ''
         form.value.note = '' 
         
-        // Client PO from Master or CLF
-        form.value.clientPO = masterRecord ? masterRecord.client_po : (clfRecord ? (clfRecord.client_po || clfRecord['PO']) : '')
+        // Client PO from Master or CLF - Prioritize CLF!
+        form.value.clientPO = clfRecord ? (clfRecord.client_po || clfRecord['PO']) : (masterRecord ? masterRecord.client_po : '')
 
         // Separate CLF Data (No Auto-Fill)
         if (clfRecord) {
