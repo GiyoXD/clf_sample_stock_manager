@@ -1,14 +1,30 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { ROOT_DIR } = require('./path_config');
 
 // Parse CLI args for --db-path
 const args = process.argv.slice(2);
 const dbPathArgIdx = args.indexOf('--db-path');
 const dbPathArg = dbPathArgIdx !== -1 ? args[dbPathArgIdx + 1] : null;
 
-const dbPath = dbPathArg || process.env.DB_PATH || path.join(__dirname, 'database.sqlite');
+// Use ROOT_DIR to ensure DB persists in the exe folder, not temp
+const dbPath = (dbPathArgIdx !== -1 ? args[dbPathArgIdx + 1] : null) 
+    || process.env.DB_PATH 
+    || path.join(ROOT_DIR, 'database.sqlite');
 console.log('Database Path:', dbPath); // Debug log
-const db = new Database(dbPath); // Verbose disabled for performance
+
+// Native Binding Fix for PKG
+// When running in pkg, the native binding cannot be loaded from snapshot.
+// We must point to the external .node file.
+let dbOptions = {};
+if (process.pkg) {
+    // We expect 'better_sqlite3.node' to be adjacent to the executable
+    const bindingPath = path.join(path.dirname(process.execPath), 'better_sqlite3.node');
+    console.log('PKG Mode Detected. Using Native Binding:', bindingPath);
+    dbOptions.nativeBinding = bindingPath;
+}
+
+const db = new Database(dbPath, dbOptions); // Verbose disabled for performance
 db.pragma('journal_mode = WAL');
 
 // Initialize Tables
@@ -54,105 +70,44 @@ const initDB = () => {
     `);
 
     // Master Data Table (Cached from parsing)
-    // Refactored to English Column Names (v2.1)
+    // PERSISTENT: Use IF NOT EXISTS, do NOT drop on start
     db.exec(`
         CREATE TABLE IF NOT EXISTS master_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            using_po TEXT,      -- Was yxdh
-            client TEXT,        -- Was khjc
-            client_po TEXT,     -- Was client_po
-            product_name TEXT,  -- Was scmc
-            product_code TEXT,  -- Was cpmc
-            quality_note TEXT   -- Was zlyq
-        )
-    `);
-
-    // Migration: Add client_po if not exists (Legacy check removed as we drop table above)
-    // try {
-    //     db.exec("ALTER TABLE master_data ADD COLUMN client_po TEXT");
-    // } catch (e) {
-    //     // Column likely exists, ignore
-    // }
-
-    // Migration: Add deleted_at to inventory
-    try {
-        db.exec("ALTER TABLE inventory ADD COLUMN deleted_at DATETIME DEFAULT NULL");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Migration: Add deleted_at to shipments
-    try {
-        db.exec("ALTER TABLE shipments ADD COLUMN deleted_at DATETIME DEFAULT NULL");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Migration: Add image_path to shipments
-    try {
-        db.exec("ALTER TABLE shipments ADD COLUMN image_path TEXT");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Migration: Add qty to shipments
-    try {
-        db.exec("ALTER TABLE shipments ADD COLUMN qty INTEGER DEFAULT 1");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Migration: Add size to shipments
-    try {
-        db.exec("ALTER TABLE shipments ADD COLUMN size TEXT");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Migration: Add client to shipments (and backfill)
-    try {
-        db.exec("ALTER TABLE shipments ADD COLUMN client TEXT");
-        console.log("Migrated: Added client column to shipments.");
-        // Backfill existing data
-        db.exec("UPDATE shipments SET client = (SELECT client FROM inventory WHERE inventory.id = shipments.stock_id) WHERE client IS NULL");
-        console.log("Migrated: Backfilled client data for shipments.");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Migration: Add note to shipments
-    try {
-        db.exec("ALTER TABLE shipments ADD COLUMN note TEXT");
-        console.log("Migrated: Added note column to shipments.");
-    } catch (e) {
-        // Column likely exists
-    }
-
-    // Audit Logs Table
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            action TEXT,
-            description TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            using_po TEXT,
+            client TEXT,
+            client_po TEXT,
+            product_name TEXT,
+            product_code TEXT,
+            quality_note TEXT,
+            production_scale INTEGER DEFAULT 0 -- Included in Create
         )
     `);
 
     // CLF Data Table (Cached from parsing)
+    // PERSISTENT: Use IF NOT EXISTS, do NOT drop on start
     db.exec(`
         CREATE TABLE IF NOT EXISTS clf_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ttx_po TEXT, -- PO
+            ttx_po TEXT, 
             batch TEXT,
             client_po TEXT,
-            order_qty INTEGER,
+            order_qty INTEGER DEFAULT 0, -- Included in Create
             pieces TEXT
         )
     `);
 
+    // Migration: Add production_scale to master_data
+    try {
+        db.exec("ALTER TABLE master_data ADD COLUMN production_scale REAL DEFAULT 0");
+        console.log("Migrated: Added production_scale column to master_data.");
+    } catch (e) {
+        // Column likely exists
+    }
+
     // Migration: Add order_qty to clf_data
     try {
-        db.exec("ALTER TABLE clf_data ADD COLUMN order_qty INTEGER");
+        db.exec("ALTER TABLE clf_data ADD COLUMN order_qty REAL DEFAULT 0");
         console.log("Migrated: Added order_qty column to clf_data.");
     } catch (e) {
         // Column likely exists
