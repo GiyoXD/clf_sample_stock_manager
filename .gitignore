@@ -14,6 +14,8 @@ lerna-debug.log*
 # Database
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
 backend/database.sqlite
 
 # Uploads
@@ -37,7 +39,11 @@ backend/uploads/
 *.sln
 *.sw?
 
-# Build output
+# Binaries and build output
+*.exe
+frontend/src-tauri/binaries/
+backend/node.exe
+backend/error_screenshot.png
 dist/
 build/
 
