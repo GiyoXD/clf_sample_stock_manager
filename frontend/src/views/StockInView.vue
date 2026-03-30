@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 
 const store = useInventoryStore()
@@ -27,9 +27,26 @@ const form = ref({
 })
 
 // Ensure data is loaded
+// Ensure data is loaded
+const searchInput = ref(null)
+
 onMounted(() => {
     store.fetchAll()
+    window.addEventListener('keydown', handleGlobalSearch)
 })
+
+import { onUnmounted } from 'vue'
+onUnmounted(() => {
+    window.removeEventListener('keydown', handleGlobalSearch)
+})
+
+const handleGlobalSearch = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        searchInput.value?.focus()
+    }
+}
+
 
 const handleSearch = () => {
     const searchKey = searchPO.value.trim().toLowerCase()
@@ -74,8 +91,12 @@ const handleSearch = () => {
                 order_qty: clfRecord.order_qty || 0,
                 pieces: clfRecord.pieces || ''
             }
+            // Populate form reference
+            form.value.order_scale = clfRecord.order_qty || 0
         } else {
             clfMatch.value = null
+            // Fallback to Master Data if available
+            form.value.order_scale = masterRecord ? (masterRecord.production_scale || 0) : 0
         }
     }
 
@@ -86,24 +107,84 @@ const handleSearch = () => {
 
     // Check Related POs / Sub-POs (Warning)
     const related = new Set()
+
+    /**
+     * Fuzzy subsequence match: checks if all characters of 'search' appear
+     * in 'target' in the same order (not necessarily contiguous).
+     * Example: fuzzyMatch("2028", "2602028") => true
+     *          fuzzyMatch("12028", "2512028") => true
+     */
+    const fuzzyMatch = (search, target) => {
+        let searchIdx = 0
+        for (let i = 0; i < target.length && searchIdx < search.length; i++) {
+            if (target[i] === search[searchIdx]) {
+                searchIdx++
+            }
+        }
+        return searchIdx === search.length
+    }
     
-    // Check Master Data for suffix matches
+    // Check Master Data for prefix or fuzzy matches
     store.masterData.forEach(r => {
         const po = String(r.using_po || '').toLowerCase()
-        if (po.length > searchKey.length && po.startsWith(searchKey)) {
-            related.add(r.using_po)
+        if (po.length > searchKey.length) {
+            // Prefix match (original) OR fuzzy subsequence match (new)
+            if (po.startsWith(searchKey) || fuzzyMatch(searchKey, po)) {
+                related.add(r.using_po)
+            }
         }
     })
 
-    // Check Inventory for suffix matches
+    // Check Inventory for prefix or fuzzy matches
     store.inventory.forEach(i => {
         const po = String(i.po || '').toLowerCase()
-        if (po.length > searchKey.length && po.startsWith(searchKey)) {
-            related.add(i.po)
+        if (po.length > searchKey.length) {
+            // Prefix match (original) OR fuzzy subsequence match (new)
+            if (po.startsWith(searchKey) || fuzzyMatch(searchKey, po)) {
+                related.add(i.po)
+            }
         }
     })
 
-    relatedPOs.value = Array.from(related).sort()
+    // Sort Descending (Newest/Highest PO first)
+    // Handle suffix cases like "2512028-01" vs "2512028"
+    relatedPOs.value = Array.from(related).sort((a, b) => {
+        // Extract base numbers
+        const numA = parseInt(a.replace(/[^\d]/g, '')) || 0
+        const numB = parseInt(b.replace(/[^\d]/g, '')) || 0
+        if (numA !== numB) {
+            return numB - numA // Descending numeric
+        }
+        // If numeric parts identical (e.g. same PO with diff suffix), normal string sort (usually keeps main then -01)
+        return a.localeCompare(b)
+    })
+}
+
+/**
+ * Select a hint by index (keyboard shortcut).
+ * @param {number} index - 0-based index of the hint to select
+ */
+const selectHint = (index) => {
+    if (index >= 0 && index < relatedPOs.value.length) {
+        searchPO.value = relatedPOs.value[index]
+        handleSearch()
+    }
+}
+
+/**
+ * Handle keydown on search input for hint shortcuts.
+ * Numbers 1-9 select hints when available.
+ */
+const handleSearchKeydown = (event) => {
+    // Check if key is 1-9 and hints are available
+    const key = event.key
+    if (relatedPOs.value.length > 0 && key >= '1' && key <= '9') {
+        const index = parseInt(key) - 1 // Convert to 0-based index
+        if (index < relatedPOs.value.length) {
+            event.preventDefault() // Don't type the number
+            selectHint(index)
+        }
+    }
 }
 
 const saveStock = async () => {
@@ -176,8 +257,10 @@ const undoEntry = async (index, id) => {
             </h2>
             <div class="relative">
                 <input 
+                    ref="searchInput"
                     v-model="searchPO" 
                     @keyup.enter="handleSearch"
+                    @keydown="handleSearchKeydown"
                     type="text" 
                     placeholder="Scan or Enter PO Number..." 
                     class="w-full text-lg px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none transition-shadow"
@@ -196,9 +279,10 @@ const undoEntry = async (index, id) => {
                         <h3 class="text-indigo-800 font-bold">Related Variations Found!</h3>
                         <p class="text-xs text-indigo-600 mb-1">Did you mean one of these?</p>
                         <div class="flex flex-wrap gap-2 mt-1">
-                            <span v-for="po in relatedPOs" :key="po" 
+                            <span v-for="(po, idx) in relatedPOs" :key="po" 
                                 @click="searchPO = po; handleSearch()"
-                                class="cursor-pointer bg-white border border-indigo-200 text-indigo-700 px-2 py-1 rounded text-xs hover:bg-indigo-100 hover:border-indigo-300 transition-colors font-mono">
+                                class="cursor-pointer bg-white border border-indigo-200 text-indigo-700 px-2 py-1 rounded text-xs hover:bg-indigo-100 hover:border-indigo-300 transition-colors font-mono flex items-center gap-1">
+                                <span v-if="idx < 9" class="bg-indigo-500 text-white text-[10px] font-bold w-4 h-4 rounded flex items-center justify-center">{{ idx + 1 }}</span>
                                 {{ po }}
                             </span>
                         </div>
@@ -246,6 +330,14 @@ const undoEntry = async (index, id) => {
                     <div class="col-span-2">
                         <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Quality Note (Editable)</label>
                         <textarea v-model="form.note" rows="3" class="w-full border border-slate-300 rounded px-3 py-2 text-slate-700 focus:border-teal-500 outline-none"></textarea>
+                    </div>
+                    <!-- Added Reference Field -->
+                    <div class="col-span-2 mt-2 pt-2 border-t border-slate-100">
+                        <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Production Scale (Ref)</label>
+                        <div class="flex items-center">
+                            <input :value="form.order_scale || 0" class="w-24 bg-slate-100 border border-slate-200 rounded px-3 py-2 text-slate-700 font-mono font-bold" readonly>
+                            <span class="ml-2 text-xs text-slate-400">SF (Auto-lookup)</span>
+                        </div>
                     </div>
                 </div>
             </div>

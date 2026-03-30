@@ -1,11 +1,13 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 
 const store = useInventoryStore()
 const date = ref(new Date().toISOString().split('T')[0])
 const clientFilter = ref('')
 const imageFile = ref(null)
+const showDebug = ref(false)
+const showBatchPrefix = ref(true)
 
 const removeFromDraft = (index) => {
     store.removeFromDraft(index)
@@ -55,7 +57,22 @@ const confirmSent = async () => {
 
 onMounted(() => {
     store.fetchAll()
+    window.addEventListener('keydown', handleGlobalSearch)
 })
+
+onUnmounted(() => {
+    window.removeEventListener('keydown', handleGlobalSearch)
+})
+
+const clientFilterInput = ref(null)
+
+const handleGlobalSearch = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        clientFilterInput.value?.focus()
+    }
+}
+
 
 const handleCourierChange = (item) => {
     if (item.courier === 'Others') {
@@ -103,6 +120,15 @@ const batchRemove = () => {
     }
     selected.value = []
 }
+
+// Print Logic: Flatten the draft list based on 'qty'
+const printableLabels = computed(() => {
+    return store.draft.flatMap(item => {
+        // Ensure at least 1 label, defaults to 1 if invalid
+        const count = Math.max(1, parseInt(item.qty) || 1)
+        return Array(count).fill(item)
+    })
+})
 </script>
 
 <template>
@@ -122,7 +148,7 @@ const batchRemove = () => {
                  </div>
                  <div class="w-64">
                     <label class="block text-xs font-bold text-slate-400 mb-1">Filter by Client</label>
-                    <input type="text" v-model="clientFilter" placeholder="Client Name..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
+                    <input ref="clientFilterInput" type="text" v-model="clientFilter" placeholder="Client Name..." class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none">
                  </div>
             </div>
 
@@ -157,6 +183,14 @@ const batchRemove = () => {
                                 <!-- Show available stock hint -->
                                 <div class="text-[10px] text-teal-600 mt-1">
                                     Max: {{ store.inventory.find(i => i.id == dItem.stockId)?.current_qty ?? '?' }}
+                                </div>
+                                <!-- Production Scale Source Info (User Request) -->
+                                <div class="text-[10px] mt-1 flex items-center gap-1" v-if="dItem.scale || dItem.source !== 'None'">
+                                    <span class="font-semibold text-slate-600">Scale: {{ dItem.scale }}</span>
+                                    <span class="text-[9px] px-1 rounded text-white" 
+                                        :class="dItem.source === 'CLF' ? 'bg-green-500' : (dItem.source === 'Master' ? 'bg-blue-500' : 'bg-rose-400')">
+                                        {{ dItem.source }}
+                                    </span>
                                 </div>
                             </td>
                             <td class="px-4 py-3">
@@ -217,6 +251,12 @@ const batchRemove = () => {
                     <input type="file" @change="handleFileChange" accept="image/*" class="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100 cursor-pointer">
                 </div>
                 <div class="flex space-x-4">
+                    <button @click="showBatchPrefix = !showBatchPrefix" class="text-slate-500 hover:text-teal-600 text-sm font-medium underline">
+                        <i :class="showBatchPrefix ? 'fa-regular fa-square-check' : 'fa-regular fa-square'"></i> Batch Label
+                    </button>
+                    <button @click="showDebug = !showDebug" class="text-slate-500 hover:text-teal-600 text-sm font-medium underline">
+                        <i class="fa-solid fa-eye mr-1"></i> {{ showDebug ? 'Hide Preview' : 'Show Label Preview' }}
+                    </button>
                     <button @click="printLabels" class="bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-lg shadow-md font-medium">
                         <i class="fa-solid fa-print mr-2"></i> Print Labels
                     </button>
@@ -226,35 +266,170 @@ const batchRemove = () => {
                 </div>
             </div>
 
-            <!-- Hidden Print Area -->
-            <div id="print-area">
-                <!-- 100mm x 70mm -->
-                <div v-for="(item, i) in store.draft" :key="i" class="print-label border-2 border-black p-4 mb-4 font-sans text-xs flex flex-col justify-between" style="width: 100mm; height: 70mm; margin: 0 auto; box-sizing: border-box;">
-                    <div>
-                        <div class="font-bold text-sm mb-1">{{ item.client }}</div> 
-                        <div class="text-[10px] text-gray-600">PO: {{ item.po }}</div>
-                        <hr class="border-black my-1">
-                        <div class="font-bold text-lg leading-tight mb-1">{{ item.itemNo }}</div>
-                        <div class="text-s leading-tight">{{ item.product }}</div>
-                    </div>
-                    <div class="text-[10px] mt-2">
-                        <div class="flex justify-between">
-                            <span>Date: {{ date }}</span>
-                            <span>Qty: {{ item.qty || 1 }}</span>
+            <!-- Hidden Print Area (Teleported to Body for clean printing) -->
+            <Teleport to="body">
+                <div id="print-area" :class="{ 'debug-visible': showDebug }">
+                    <!-- Cut Lines (Overlay) -->
+                    <div class="cut-line-vert"></div>
+                    <div class="cut-line-horz-1"></div>
+                    <div class="cut-line-horz-2"></div>
+
+                    <div v-for="(item, i) in printableLabels" :key="i" class="print-label">
+                        <!-- Label Content (Unchanged) -->
+                        <div class="border-b border-black pb-0.5 mb-0.5">
+                            <div class="text-sm font-bold flex flex-wrap items-baseline gap-1 leading-tight">
+                                <span class="uppercase">{{ item.client }}</span>
+                                <span>{{ item.po }}</span>
+                            </div>
+                            <!-- Client PO: Keep text-base for visibility, handle wrapping -->
+                            <div class="text-base font-bold mt-0 leading-tight whitespace-pre-wrap break-words">PO# {{ item.clientPO || item.client_po }}</div>
                         </div>
-                        <div>Batch: {{ item.batch }}</div>
-                        <div class="mt-2 text-[8px] italic text-right"> Sample Manager </div>
+
+                        <div class="flex-grow flex flex-col justify-start">
+                            <div class="text-lg font-black leading-none mb-0.5">{{ item.itemNo }}</div>
+                            <!-- Product: Reduced to text-sm to allow more space for Client PO -->
+                            <div class="text-sm font-bold leading-tight line-clamp-2">{{ item.product }}</div>
+                        </div>
+
+                        <div class="border-t border-black pt-1 mt-auto">
+                            <div class="text-base font-bold leading-tight whitespace-pre-line">
+                                <span v-if="showBatchPrefix">批次号: </span>{{ item.batch }}
+                            </div>
+                            <div class="text-[10px] text-right mt-0.5 leading-none">
+                                {{ date }}
+                                <div v-if="item.scale" class="font-bold mt-0.5 pt-0.5 flex justify-end items-center gap-1">
+                                    <span>{{ item.scale }} SF</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </Teleport>
     </div>
 </template>
 
 <style scoped>
-@media print {
-    #print-area { display: block; }
+/* Cut Line Styles (Shared) */
+.cut-line-vert {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    border-left: 1px dashed #ccc;
+    z-index: 10;
+    transform: translateX(-0.5px); /* Center perfectly */
 }
+.cut-line-horz-1 {
+    position: absolute;
+    top: 33.33%;
+    left: 0;
+    right: 0;
+    border-top: 1px dashed #ccc;
+    z-index: 10;
+}
+.cut-line-horz-2 {
+    position: absolute;
+    top: 66.66%;
+    left: 0;
+    right: 0;
+    border-top: 1px dashed #ccc;
+    z-index: 10;
+}
+
+/* Screen: Hide the print area */
 @media screen {
     #print-area { display: none; }
+    #print-area.debug-visible { 
+        display: grid; 
+        position: fixed; 
+        top: 10%;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10000;
+        border: 2px dashed #000; 
+        background: #eee;
+        box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        
+        /* Mimic print layout EXACTLY */
+        width: 108.9mm; /* Updated to user's 10.89cm */
+        height: 152.4mm;
+        
+        grid-template-columns: repeat(2, 50%); /* EXACTLY 50% */
+        grid-auto-rows: min-content; 
+        gap: 0;
+        padding: 0;
+    }
+    
+    #print-area.debug-visible .print-label {
+        /* Screen preview border (keep helpful for debugging layout, but subtle) */
+        outline: 1px dotted #e5e7eb; 
+        height: 50.8mm;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 2mm; /* Optimized Padding */
+        background: white;
+    }
+}
+
+/* Print: Format for 4" x 6" Label */
+@media print {
+    /* Globally hide everything except the print area */
+    :global(body > *:not(#print-area)) {
+        display: none !important;
+    }
+
+    /* Ensure print area is visible */
+    #print-area {
+        display: grid !important;
+        visibility: visible !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        
+        grid-template-columns: repeat(2, 50%);
+        grid-auto-rows: min-content; 
+        gap: 0;
+        box-sizing: border-box;
+    }
+
+    /* DEFINITIVE PAGE SIZE: 108.9mm Width x 152.4mm Height */
+    @page {
+        size: 108.9mm 152.4mm; 
+        margin: 0; 
+    }
+
+    .print-label {
+        /* Layout logic */
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        
+        /* Height: To fit 3 rows (6 items) on 152mm paper */
+        /* 152mm / 3 ~ 50mm */
+        height: 50.8mm; /* 152.4 / 3 = 50.8 perfectly */
+        overflow: hidden; 
+        
+        /* Spacing */
+        padding: 3mm 5mm 3mm 8mm; /* top right bottom left - extra left for printer margin */ 
+        margin: 0;
+        
+        /* Printing mechanics */
+        break-inside: avoid;
+        background: white;
+        
+        /* No Borders individually - handled by overlays */
+        border: none;
+
+        /* Font defaults */
+        color: black;
+        font-family: sans-serif;
+     }
 }
 </style>

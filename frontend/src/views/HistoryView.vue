@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 import ImportModal from '../components/ImportModal.vue'
 
@@ -21,7 +21,22 @@ const filters = ref({
 
 onMounted(() => {
     store.fetchAll()
+    window.addEventListener('keydown', handleGlobalSearch)
 })
+
+onUnmounted(() => {
+    window.removeEventListener('keydown', handleGlobalSearch)
+})
+
+const poFilterInput = ref(null)
+
+const handleGlobalSearch = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        poFilterInput.value?.focus()
+    }
+}
+
 
 // Pagination State
 const currentPage = ref(1)
@@ -118,9 +133,41 @@ watch(filteredHistory, () => {
     currentPage.value = 1
 })
 
+const missingPos = computed(() => {
+    if (!filters.value.po.trim()) return []
+    const queries = filters.value.po.split('\n').map(q => q.trim()).filter(q => q)
+    
+    // We check against filteredHistory so it respects other filters too.
+    const currentItems = filteredHistory.value
+    
+    return queries.filter(q => {
+        const qLower = q.toLowerCase()
+        return !currentItems.some(s => (s.po || '').toLowerCase().includes(qLower))
+    })
+})
+
 const getImageUrl = (path) => {
     if (!path) return null
-    return `http://localhost:3000/${path}`
+    // Normalize slashes
+    let normalized = path.replace(/\\/g, '/')
+    
+    // Robust extraction: Find 'uploads/' (case insensitive)
+    // Captures 'uploads/filename.ext'
+    const match = normalized.match(/(?:.*\/)?(uploads\/.*)/i)
+    if (match && match[1]) {
+        return `http://localhost:3000/${match[1]}`
+    }
+
+    // Fallback 1: Just filename? (If no slash, assume it's in uploads/)
+    if (!normalized.includes('/')) {
+         return `http://localhost:3000/uploads/${normalized}`
+    }
+
+    // Fallback 2: Absolute URL?
+    if (normalized.startsWith('http')) return normalized;
+
+    // Fallback 3: Return as is (relative) or valid path
+    return `http://localhost:3000/${normalized}`
 }
 
 const revertShipment = async (shipment) => {
@@ -227,7 +274,7 @@ const handleImportSuccess = () => {
             @refresh="handleImportSuccess" 
         />
         <!-- Search Filters -->
-        <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 sticky top-20 z-30">
             <div class="flex justify-between items-center mb-3">
                 <h2 class="text-sm font-bold text-slate-500 uppercase">Search History</h2>
                 <div class="flex">
@@ -285,11 +332,18 @@ const handleImportSuccess = () => {
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">PO Number (One per line)</label>
                     <textarea 
+                        ref="poFilterInput"
                         v-model="filters.po" 
                         placeholder="Search POs..." 
                         rows="1"
                         class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none min-h-[38px] max-h-[120px]"
                     ></textarea>
+                     <div v-if="missingPos.length > 0" class="mt-1 text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded border border-rose-100">
+                        <div class="mb-1">Missing POs ({{ missingPos.length }}):</div>
+                        <div class="max-h-20 overflow-y-auto font-mono">
+                            <div v-for="po in missingPos" :key="po">- {{ po }}</div>
+                        </div>
+                    </div>
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">Product Name</label>

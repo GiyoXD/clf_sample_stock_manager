@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 import { useRouter } from 'vue-router'
 import ImportModal from '../components/ImportModal.vue'
@@ -20,9 +20,24 @@ const filters = ref({
     status: 'all' // all, available, out_of_stock
 })
 
+const poFilterInput = ref(null)
+
 onMounted(() => {
     store.fetchAll()
+    window.addEventListener('keydown', handleGlobalSearch)
 })
+
+onUnmounted(() => {
+    window.removeEventListener('keydown', handleGlobalSearch)
+})
+
+const handleGlobalSearch = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        poFilterInput.value?.focus()
+    }
+}
+
 
 // Pagination State
 const currentPage = ref(1)
@@ -99,6 +114,20 @@ const filteredStock = computed(() => {
 // Watch for filter changes to reset pagination
 watch(filteredStock, () => {
     currentPage.value = 1
+})
+
+const missingPos = computed(() => {
+    if (!filters.value.po.trim()) return []
+    const queries = filters.value.po.split('\n').map(q => q.trim()).filter(q => q)
+    
+    // We check against filteredStock so it respects other filters too.
+    // If a PO exists but is filtered out by date/client, it counts as missing here.
+    const currentItems = filteredStock.value
+    
+    return queries.filter(q => {
+        const qLower = q.toLowerCase()
+        return !currentItems.some(i => (i.po || '').toLowerCase().includes(qLower))
+    })
 })
 
 
@@ -259,7 +288,7 @@ const formatDateTime = (dateStr) => {
             @refresh="handleImportSuccess" 
         />
         <!-- Dashboard / Filter Header -->
-        <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-4">
+        <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-4 sticky top-20 z-30">
              <div class="flex justify-between items-center mb-4">
                 <h2 class="text-xl font-bold text-slate-700">Stock Inventory</h2>
                 <!-- Bulk Actions -->
@@ -317,11 +346,18 @@ const formatDateTime = (dateStr) => {
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">PO Number (One per line)</label>
                     <textarea 
+                        ref="poFilterInput"
                         v-model="filters.po" 
                         placeholder="Search POs..." 
                         rows="1"
                         class="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:border-teal-500 outline-none min-h-[38px] max-h-[120px]"
                     ></textarea>
+                     <div v-if="missingPos.length > 0" class="mt-1 text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded border border-rose-100">
+                        <div class="mb-1">Missing POs ({{ missingPos.length }}):</div>
+                        <div class="max-h-20 overflow-y-auto font-mono">
+                            <div v-for="po in missingPos" :key="po">- {{ po }}</div>
+                        </div>
+                    </div>
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-400 mb-1">Product Name</label>

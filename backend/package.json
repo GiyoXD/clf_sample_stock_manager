@@ -4,7 +4,8 @@
   "bin": "server.js",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build-exe": "caxa --input . --output sample-manager-backend.exe -- \"{{caxa}}/node.exe\" \"{{caxa}}/server.js\" {{args}}"
   },
   "dependencies": {
     "better-sqlite3": "^12.5.0",
@@ -15,12 +16,14 @@
     "nodemon": "^3.1.11"
   },
   "devDependencies": {
+    "caxa": "^3.0.1",
     "pkg": "^5.8.1"
   },
   "pkg": {
     "scripts": "node_modules/better-sqlite3/lib/**/*.js",
-    "assets": [
-      "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
-    ]
+    "targets": [
+      "node22-win-x64"
+    ],
+    "outputPath": "."
   }
 }

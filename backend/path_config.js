@@ -11,13 +11,26 @@ const fs = require('fs');
  * This is the most reliable way to ensure "Portable" behavior where data stays with the app.
  */
 
-const ROOT_DIR = path.join(process.env.APPDATA, 'com.samplemanager.app');
+// Persistent Data Root: Standard Windows AppData
+// We prioritize Roaming because it's where Tauri's app_data_dir() points to by default on Windows
+const APPDATA = process.env.APPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Roaming') : null);
+
+if (!APPDATA) {
+    console.error("CRITICAL ERROR: Could not determine AppData directory. Data persistence may fail.");
+}
+
+const ROOT_DIR = APPDATA ? path.join(APPDATA, 'com.samplemanager.app') : process.cwd();
+
 if (!fs.existsSync(ROOT_DIR)) {
-    fs.mkdirSync(ROOT_DIR, { recursive: true });
+    try {
+        fs.mkdirSync(ROOT_DIR, { recursive: true });
+    } catch (e) {
+        console.error(`FAILED to create ROOT_DIR: ${ROOT_DIR}`, e);
+    }
 }
 
 module.exports = {
     ROOT_DIR,
-    // Helper to check if we are compiled (optional usage)
-    isCompiled: !process.argv[0].includes('node.exe')
+    // Helper to check if we are running in a bundled executable (pkg or caxa)
+    isCompiled: !!(process.pkg || process.env.CAXA) || !process.argv[0].toLowerCase().includes('node.exe')
 };

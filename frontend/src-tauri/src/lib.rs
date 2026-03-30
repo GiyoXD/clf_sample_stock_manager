@@ -14,50 +14,55 @@ pub fn run() {
     .plugin(tauri_plugin_shell::init())
     .manage(ServerProcess(server_process.clone()))
     .setup(|app| {
-        let handle = app.handle().clone();
-        let process_state = app.state::<ServerProcess>();
-        let process_state_clone = process_state.0.clone();
-        
-        // Spawn Sidecar
-        tauri::async_runtime::spawn(async move {
-            let app_data = handle.path().app_data_dir().unwrap();
-            if !app_data.exists() {
-                std::fs::create_dir_all(&app_data).unwrap();
-            }
-            let db_path = app_data.join("database.sqlite").to_string_lossy().to_string();
-            
-            println!("Tauri Sidecar: Using DB Path: {}", db_path);
+        // Spawn Sidecar (Only in Release Mode)
+        #[cfg(not(debug_assertions))]
+        {
+            let handle = app.handle().clone();
+            let process_state = app.state::<ServerProcess>();
+            let process_state_clone = process_state.0.clone();
 
-            let sidecar_command = handle.shell().sidecar("server").unwrap()
-                .args(["--db-path", &db_path]);
-
-            let (mut rx, child) = sidecar_command
-                .spawn()
-                .expect("Failed to spawn sidecar");
-
-            // Store child handle
-            *process_state_clone.lock().unwrap() = Some(child);
-
-            // Monitor Output
             tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                     match event {
-                        tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                             let msg = String::from_utf8(line).unwrap();
-                             println!("Sidecar: {}", msg);
-                             log::info!("Sidecar: {}", msg);
-                        }
-                        tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                             let msg = String::from_utf8(line).unwrap();
-                             println!("Sidecar Error: {}", msg);
-                             log::error!("Sidecar Error: {}", msg);
-                        }
-                        _ => {}
-                    }
+                let app_data = handle.path().app_data_dir().unwrap();
+                if !app_data.exists() {
+                    std::fs::create_dir_all(&app_data).unwrap();
                 }
+                let db_path = app_data.join("database.sqlite").to_string_lossy().to_string();
+                
+                println!("Tauri Sidecar: Using DB Path: {}", db_path);
+
+                let sidecar_command = handle.shell().sidecar("server").unwrap()
+                    .args(["--db-path", &db_path]);
+
+                let (mut rx, child) = sidecar_command
+                    .spawn()
+                    .expect("Failed to spawn sidecar");
+
+                // Store child handle
+                *process_state_clone.lock().unwrap() = Some(child);
+
+                // Monitor Output
+                tauri::async_runtime::spawn(async move {
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                                let msg = String::from_utf8(line).unwrap();
+                                println!("Sidecar: {}", msg);
+                                log::info!("Sidecar: {}", msg);
+                            }
+                            tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                                let msg = String::from_utf8(line).unwrap();
+                                println!("Sidecar Error: {}", msg);
+                                log::error!("Sidecar Error: {}", msg);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
             });
-            
-        });
+        }
+
+        #[cfg(debug_assertions)]
+        println!("Debug Mode: Sidecar disabled. Please run 'node server.js' manually.");
 
         Ok(())
     })

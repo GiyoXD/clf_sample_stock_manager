@@ -2,16 +2,32 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const { ROOT_DIR } = require('./path_config');
 
-// Parse CLI args for --db-path
-const args = process.argv.slice(2);
-const dbPathArgIdx = args.indexOf('--db-path');
-const dbPathArg = dbPathArgIdx !== -1 ? args[dbPathArgIdx + 1] : null;
+// Helper to find argument value: --db-path=VAL or --db-path VAL
+const findArgValue = (flag) => {
+    const args = process.argv;
+    // Check for --flag=value
+    const equalIdx = args.find(a => a.startsWith(`${flag}=`));
+    if (equalIdx) return equalIdx.split('=')[1];
+    // Check for --flag value
+    const idx = args.indexOf(flag);
+    if (idx !== -1 && idx + 1 < args.length) return args[idx + 1];
+    return null;
+};
 
-// Use ROOT_DIR to ensure DB persists in the exe folder, not temp
-const dbPath = (dbPathArgIdx !== -1 ? args[dbPathArgIdx + 1] : null) 
+const dbPathArg = findArgValue('--db-path');
+
+// Priority: 1. CLI Arg, 2. Env Var, 3. ROOT_DIR (persistent)
+const dbPath = dbPathArg 
     || process.env.DB_PATH 
     || path.join(ROOT_DIR, 'database.sqlite');
-console.log('Database Path:', dbPath); // Debug log
+
+console.log('--------------------------------------------------');
+console.log(`DATABASE SERVICE STARTING...`);
+console.log(`Target database path: ${dbPath}`);
+if (dbPathArg) console.log(`  Source: CLI Argument (--db-path)`);
+else if (process.env.DB_PATH) console.log(`  Source: Environment Variable (DB_PATH)`);
+else console.log(`  Source: Persistent Root (AppData)`);
+console.log('--------------------------------------------------');
 
 // Native Binding Fix for PKG
 // When running in pkg, the native binding cannot be loaded from snapshot.

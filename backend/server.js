@@ -1,11 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const db = require('./db');
+const { ROOT_DIR } = require('./path_config'); // Import persistent root
 const app = express();
 const PORT = 3000;
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 // Configure Multer
 const logAction = (action, description) => {
@@ -18,9 +20,10 @@ const logAction = (action, description) => {
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const uploadDir = 'uploads/';
+        // Use persistent ROOT_DIR/uploads
+        const uploadDir = path.join(ROOT_DIR, 'uploads');
         if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir);
+            fs.mkdirSync(uploadDir, { recursive: true });
         }
         cb(null, uploadDir);
     },
@@ -35,7 +38,9 @@ const upload = multer({ storage: storage });
 app.use(cors());
 app.use(express.json({ limit: '500mb', strict: false }));
 app.use(express.urlencoded({ limit: '500mb', extended: true }));
-app.use('/uploads', express.static('uploads'));
+
+// Serve uploads from legitimate persistent path
+app.use('/uploads', express.static(path.join(ROOT_DIR, 'uploads')));
 
 // --- INVENTORY ROUTES ---
 
@@ -331,6 +336,98 @@ app.delete('/api/shipments/trash/:id', (req, res) => {
 
 // --- DATA ROUTES ---
 
+// Fetch Master Data (Trigger Python Scraper)
+app.post('/api/fetch-master-data', (req, res) => {
+    try {
+        console.log('Starting Master Data Fetch...');
+
+        // 1. Run Python Script (Blocking, wait for completion)
+        // script path: ./utils/fetch_master_data.py
+        const scriptPath = path.join(__dirname, 'utils', 'fetch_master_data.py');
+
+        // Define persistent download directory
+        const downloadDir = path.join(ROOT_DIR, 'Downloads');
+        if (!fs.existsSync(downloadDir)) {
+            fs.mkdirSync(downloadDir, { recursive: true });
+        }
+
+        // Execute with timeout (e.g., 330 seconds)
+        // Pass download directory as argument
+        const stdout = execSync(`python "${scriptPath}" "${downloadDir}"`, { encoding: 'utf-8', timeout: 330000 });
+
+        // 2. Parse Stdout for "RESULT:filepath"
+        console.log('Script Output:', stdout);
+
+        const match = stdout.match(/RESULT:(.*)/);
+        if (!match || !match[1]) {
+            throw new Error('Script executed but did not return a file path. Check logs.');
+        }
+
+        const sourcePath = match[1].trim();
+        if (!fs.existsSync(sourcePath)) {
+            throw new Error(`File reported at ${sourcePath} but does not exist.`);
+        }
+
+        // 3. Move to ./uploads/master_data/ (Persistent)
+        const destDir = path.join(ROOT_DIR, 'uploads', 'master_data');
+        if (!fs.existsSync(destDir)) {
+            fs.mkdirSync(destDir, { recursive: true });
+        }
+
+        const filename = `fetched_master_${Date.now()}.csv`;
+        const destPath = path.join(destDir, filename);
+
+        // Rename (Move)
+        try {
+            fs.renameSync(sourcePath, destPath);
+        } catch (mvErr) {
+            // Fallback: Copy and Delete if rename fails (cross-device issue)
+            fs.copyFileSync(sourcePath, destPath);
+            fs.unlinkSync(sourcePath);
+        }
+
+        // 4. Return the relative path for frontend access
+        // We serve /uploads static at /uploads, so path is /uploads/master_data/...
+        const servePath = `/uploads/master_data/${filename}`;
+
+        logAction('FETCH_MASTER', `Fetched new master data: ${filename}`);
+        res.json({ success: true, filePath: servePath });
+
+    } catch (err) {
+        console.error('Fetch Master Data Error:', err);
+        // Clean up message if it's a script error
+        const msg = err.stdout ? `Script Failed: ${err.stdout}` : err.message;
+        res.status(500).json({ error: msg });
+    }
+});
+
+// Delete Fetched Master File (Cleanup)
+app.delete('/api/master-data/file', (req, res) => {
+    try {
+        const { filePath } = req.body;
+        if (!filePath) return res.status(400).json({ error: 'FilePath is required' });
+
+        // Security Check: Must be in uploads/master_data
+        const relativePath = filePath.replace(/^\//, ''); // Remove leading slash
+        // Construct full path using ROOT_DIR
+        const fullPath = path.join(ROOT_DIR, relativePath.replace(/^uploads[\\/]/, 'uploads' + path.sep));
+        const allowedDir = path.join(ROOT_DIR, 'uploads', 'master_data');
+
+        if (!fullPath.startsWith(allowedDir)) {
+            return res.status(403).json({ error: 'Invalid file path' });
+        }
+
+        if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath);
+            console.log(`Cleanup: Deleted ${fullPath}`);
+        }
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Cleanup Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Get Master Data (All)
 app.get('/api/master-data', (req, res) => {
     try {
@@ -352,7 +449,7 @@ app.post('/api/master-data/sync', (req, res) => {
         }
 
         // Prepare insert for new schem
-        const insert = db.prepare('INSERT INTO master_data (using_po, client, client_po, product_name, product_code, quality_note) VALUES (?, ?, ?, ?, ?, ?)');
+        const insert = db.prepare('INSERT INTO master_data (using_po, client, client_po, product_name, product_code, quality_note, production_scale) VALUES (?, ?, ?, ?, ?, ?, ?)');
         const deleteParams = db.prepare('DELETE FROM master_data');
 
         const transaction = db.transaction((rows) => {
@@ -375,14 +472,19 @@ app.post('/api/master-data/sync', (req, res) => {
                     continue;
                 }
 
+                const scaleVal = parseFloat(String(row.production_scale || '0').replace(/,/g, '')) || 0;
+
                 insert.run(
                     String(using_po).trim(),
                     String(row.client || '').trim(),
                     String(row.client_po || '').trim(),
                     String(row.product_name || '').trim(),
                     String(row.product_code || '').trim(),
-                    String(row.quality_note || '').trim()
+                    String(row.quality_note || '').trim(),
+                    scaleVal
                 );
+                // DEBUG LOG (Verbose)
+                console.log(`[IMPORT DEBUG] PO: ${using_po} | Raw Scale: "${row.production_scale}" | Parsed Scale: ${scaleVal}`);
             }
 
             if (skippedCount > 0) {
@@ -421,6 +523,12 @@ app.post('/api/clf-data/sync', (req, res) => {
     // Columns: ttx_po, batch, client_po, order_qty, pieces
     const insert = db.prepare('INSERT INTO clf_data (ttx_po, batch, client_po, order_qty, pieces) VALUES (?, ?, ?, ?, ?)');
     const clear = db.prepare('DELETE FROM clf_data');
+
+    // SAFEGUARD: If data is empty or invalid, DO NOT clear the table.
+    if (!Array.isArray(data) || data.length === 0) {
+        console.warn('Sync CLF: Received empty data payload. Skipping sync to preserve existing data.');
+        return res.json({ count: 0, message: 'No data to sync. Existing data preserved.' });
+    }
 
     const transaction = db.transaction((rows) => {
         clear.run();
@@ -472,8 +580,10 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
         }
-        // Return the path relative to server root
-        res.json({ path: req.file.path.replace(/\\/g, '/') }); // Normalize slashes
+        // Return the path relative to server root (e.g., 'uploads/filename.jpg')
+        // req.file.path is absolute because dest is absolute. We need to strip ROOT_DIR
+        const relativePath = path.relative(ROOT_DIR, req.file.path).replace(/\\/g, '/');
+        res.json({ path: relativePath });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

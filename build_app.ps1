@@ -5,7 +5,29 @@ Write-Host "--------------------------------------------------------"
 # 1. Build Backend
 Write-Host "[1/3] Building Backend (Node.js -> EXE)..."
 Push-Location backend
-npm run build-exe
+
+# 1a. Temporarily hide dev database and temp files to prevent bundling
+$filesToHide = @("database.sqlite", "database.sqlite-shm", "database.sqlite-wal")
+foreach ($f in $filesToHide) {
+    if (Test-Path $f) {
+        Write-Host "   - Temporarily hiding $f..."
+        Rename-Item -Path $f -NewName "$($f).bak"
+    }
+}
+
+try {
+    npm run build-exe
+}
+finally {
+    # 1b. Restore dev database
+    foreach ($f in $filesToHide) {
+        if (Test-Path "$($f).bak") {
+            Write-Host "   - Restoring $f..."
+            Rename-Item -Path "$($f).bak" -NewName $f
+        }
+    }
+}
+
 if ($LASTEXITCODE -ne 0) { Write-Error "Backend build failed"; exit 1 }
 Pop-Location
 

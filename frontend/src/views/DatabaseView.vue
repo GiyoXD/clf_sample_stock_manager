@@ -1,6 +1,6 @@
 ```
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useInventoryStore } from '../stores/inventory'
 import { useDebugStore } from '../stores/debug'
 import * as XLSX from 'xlsx' // Standard import
@@ -66,7 +66,22 @@ onMounted(async () => {
         debugStore.addLog(`DatabaseView Error: ${err.message}`, 'error', err)
         showNotification('Failed to load data', 'error')
     }
+    window.addEventListener('keydown', handleGlobalSearch)
 })
+
+onUnmounted(() => {
+    window.removeEventListener('keydown', handleGlobalSearch)
+})
+
+const masterFilterInput = ref(null)
+
+const handleGlobalSearch = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        masterFilterInput.value?.focus()
+    }
+}
+
 
 const showNotification = (msg, type = 'success') => {
     notification.value = { show: true, message: msg, type }
@@ -86,10 +101,52 @@ const mapping = ref({
     zlyq: ''  // Note
 })
 
+const isFetchingMaster = ref(false)
+
+const updateMasterList = async () => {
+    if (isFetchingMaster.value) return;
+    isFetchingMaster.value = true;
+    showNotification('Fetching Master Data from Remote... (Approx. 30s)', 'info');
+    
+    try {
+        // 1. Trigger Backend Fetch
+        const res = await axios.post('/api/fetch-master-data');
+        const filePath = res.data.filePath;
+        
+        showNotification('Download Complete. Processing...', 'success');
+        
+        // 2. Fetch the file blob
+        const fileRes = await axios.get(filePath, { responseType: 'blob' });
+        
+        // 3. Create File object
+        const fileName = filePath.split('/').pop();
+        const file = new File([fileRes.data], fileName, { type: 'text/csv' });
+        
+        // 4. Process Import
+        await processFile(file, 'master');
+        
+        // 5. Cleanup (Auto-delete)
+        await axios.delete('/api/master-data/file', { data: { filePath } });
+        console.log('Cleanup successful');
+        
+    } catch (err) {
+        console.error(err);
+        const msg = err.response?.data?.error || err.message;
+        showNotification('Fetch Failed: ' + msg, 'error');
+    } finally {
+        isFetchingMaster.value = false;
+    }
+}
+
 const handleFileImport = (event, type) => {
     const file = event.target.files[0]
     if (!file) return
+    processFile(file, type)
+    // Reset input
+    event.target.value = ''
+}
 
+const processFile = (file, type) => {
     // For CLF, do direct import (Legacy/Simple)
     // For CLF, do direct import with Index Mapping (v2.2)
     // Col B (1): Client PO (PO)
@@ -105,24 +162,43 @@ const handleFileImport = (event, type) => {
                 const wb = XLSX.read(data, { type: 'array' })
                 const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
                 
+                // Dynamic Header Mapping
+                const headers = rows[0] || [];
+                const colMap = {
+                    ttx_po: headers.findIndex(h => /ttx|单号/i.test(String(h))),
+                    batch: headers.findIndex(h => /batch|批次/i.test(String(h))),
+                    client_po: headers.findIndex(h => /client.*po|po/i.test(String(h))), // Matches 'Client PO', 'Client_PO' or 'PO'
+                    order_qty: headers.findIndex(h => /qty|数量|scale/i.test(String(h))),
+                    pieces: headers.findIndex(h => /pieces/i.test(String(h)))
+                };
+
+                // Validate critical columns
+                if (colMap.ttx_po === -1) {
+                    throw new Error('Missing required column: TTX PO (TTX单号)');
+                }
+
                 // Skip header (row 0)
                 const cleanData = []
                 for (let i = 1; i < rows.length; i++) {
                     const r = rows[i]
-                    if (!r || r.length < 7) continue; // Basic check
+                    if (!r) continue;
 
                     // Search Key (TTX PO) is critical
-                    const ttxPo = String(r[6] || '').trim();
+                    const ttxPo = String(r[colMap.ttx_po] || '').trim();
                     if (!ttxPo) continue;
 
                     cleanData.push({
                         ttx_po: ttxPo,
-                        client_po: String(r[1] || '').trim(),
-                        batch: String(r[4] || '').trim(),
+                        client_po: colMap.client_po > -1 ? String(r[colMap.client_po] || '').trim() : '',
+                        batch: colMap.batch > -1 ? String(r[colMap.batch] || '').trim() : '',
                         // Remove commas before parsing int
-                        order_qty: parseInt(String(r[5] || '0').replace(/,/g, '')) || 0,
-                        pieces: String(r[10] || '').trim()
+                        order_qty: colMap.order_qty > -1 ? (parseFloat(String(r[colMap.order_qty] || '0').replace(/,/g, '')) || 0) : 0,
+                        pieces: colMap.pieces > -1 ? String(r[colMap.pieces] || '').trim() : ''
                     })
+                }
+
+                if (cleanData.length === 0) {
+                    throw new Error('No valid CLF records found. Import cancelled.');
                 }
 
                 await store.syncClfData(cleanData)
@@ -196,14 +272,26 @@ const handleFileImport = (event, type) => {
                     product_name: String(r[10] || '').trim(),
                     quality_note: String(r[24] || '').trim(),
                     product_code: String(r[11] || '').trim(), // Index 11 = Column 12
+                    production_scale: String(r[20] || '0').replace(/,/g, '') // Index 20 (Verified Final)
                 });
             }
+
+
+
+            // PRE-FLIGHT CHECK (User Request)
+
 
             if (cleanData.length === 0) {
                return showNotification('No valid data found (Check Columns: 2=PO, 6=Client, etc.)', 'error')
             }
 
             if (!confirm(`Found ${cleanData.length} records using Standard Format. Import now?`)) return;
+
+             // DEBUG: Final Check before sending
+             if (cleanData.length > 0) {
+                 const first = cleanData[0];
+                 alert(`SENDING TO BACKEND:\nPO: ${first.using_po}\nScale (Raw String): "${first.production_scale}"`);
+             }
 
             // Send to Backend
             jsonData.value = cleanData
@@ -213,8 +301,6 @@ const handleFileImport = (event, type) => {
              console.error(err)
              showNotification('Parse Error: ' + err.message, 'error')
         }
-        // Reset input
-        event.target.value = ''
     }
     
     if (isCsv) {
@@ -237,6 +323,7 @@ const confirmImportDirect = async () => {
             const chunk = jsonData.value.slice(start, end);
             
             showNotification(`Importing chunk ${i + 1} of ${chunks}...`, 'info');
+            
             // clear=true for first chunk
             await store.syncMasterData(chunk, {}, i === 0);
         }
@@ -493,6 +580,15 @@ const clearLogs = async () => {
                     <p class="text-xs text-slate-500 mb-3">Req: yxdh (编号), khjc (客户), scmc (产品名称), cpmc (产品编号), zlyq (质量要求)</p>
                     <input type="file" accept=".xlsx, .xls, .csv" @change="e => handleFileImport(e, 'master')" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100"/>
                     <div class="mt-2 text-xs font-mono text-slate-400">Current Records: {{ store.masterDataCount }}</div>
+                    <button 
+                        @click="updateMasterList" 
+                        :disabled="isFetchingMaster"
+                        class="mt-4 w-full bg-slate-800 text-white font-bold py-2 rounded-lg hover:bg-slate-700 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <i v-if="isFetchingMaster" class="fa-solid fa-spinner fa-spin mr-2"></i>
+                        <i v-else class="fa-solid fa-cloud-download-alt mr-2"></i>
+                        {{ isFetchingMaster ? 'Fetching (Wait ~30s)...' : 'Update Master List' }}
+                    </button>
                 </div>
 
                 <div>
@@ -617,11 +713,17 @@ const clearLogs = async () => {
         <!-- Master Data Visualization -->
         <div class="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
             <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+
                 <div>
                     <h2 class="text-xl font-bold text-slate-800">Master List Preview</h2>
                     <p class="text-xs text-slate-500">Showing first 100 matches</p>
                 </div>
-                <input v-model="masterFilter" placeholder="Filter by Client or PO..." class="border border-slate-300 rounded px-3 py-1 text-sm focus:border-teal-500 outline-none w-64 shadow-sm">
+                <div class="flex gap-2">
+                    <button @click="inspectPO" class="bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1 rounded text-sm font-bold">
+                        <i class="fa-solid fa-microscope mr-1"></i> Inspect PO
+                    </button>
+                    <input ref="masterFilterInput" v-model="masterFilter" placeholder="Filter by Client or PO..." class="border border-slate-300 rounded px-3 py-1 text-sm focus:border-teal-500 outline-none w-64 shadow-sm">
+                </div>
             </div>
             <div class="overflow-x-auto max-h-[500px]">
                 <table class="w-full text-left text-sm">
@@ -632,6 +734,7 @@ const clearLogs = async () => {
                             <th class="px-6 py-3">Client</th>
                             <th class="px-6 py-3">Product</th>
                             <th class="px-6 py-3">Item No</th>
+                            <th class="px-6 py-3">Scale (SF)</th>
                             <th class="px-6 py-3">Note</th>
                         </tr>
                     </thead>
@@ -647,6 +750,7 @@ const clearLogs = async () => {
                             <td class="px-6 py-3">{{ item.client }}</td>
                             <td class="px-6 py-3">{{ item.product_name }}</td>
                             <td class="px-6 py-3">{{ item.product_code }}</td>
+                            <td class="px-6 py-3 font-mono text-indigo-600">{{ item.production_scale || '-' }}</td>
                             <td class="px-6 py-3 text-slate-500 text-xs">{{ item.quality_note }}</td>
                         </tr>
                     </tbody>

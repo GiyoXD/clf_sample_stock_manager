@@ -116,14 +116,7 @@ export const useInventoryStore = defineStore('inventory', {
                 const idx = this.inventory.findIndex(i => i.id === id);
                 if (idx !== -1) {
                     this.inventory[idx] = { ...this.inventory[idx], ...data };
-                    // Recalculate current if needed? 
-                    // Simplest is to reload or trust optimistic update.
-                    // The backend update logic was: newCurrent = oldCurrent + delta
-                    // Let's rely on fetchAll or just simple field update for now.
-                    // A robust way: fetch updated item? 
-                    // For now: update fields we sent. 
-                    // But wait, `current_qty` changes based on `original_qty` diff.
-                    // We should refetch mostly.
+                    // Refetch to get accurate current_qty from backend
                     const invRes = await axios.get('/api/inventory');
                     this.inventory = invRes.data;
                 }
@@ -173,20 +166,85 @@ export const useInventoryStore = defineStore('inventory', {
         addToDraft(stockItems) {
             // stockItems: Array of inventory objects
             stockItems.forEach(item => {
-                // Avoid duplicates? Or allow?
+                const searchPO = String(item.po || '').trim().toLowerCase();
+
+                // Lookup Records
+                const clf = this.clfData.find(c => String(c.ttx_po || c['TTX单号'] || '').trim().toLowerCase() === searchPO);
+                const master = this.masterData.find(m => String(m.using_po || '').trim().toLowerCase() === searchPO);
+
+                // Default Values (from Item)
+                let scale = 0;
+                let dataSource = 'None';
+                let dynamicBatch = item.batch;
+                let dynamicClientPO = item.clientPO || item.client_po || '';
+
+                // 1. CLF Data Priority
+                if (clf) {
+                    scale = clf.order_qty || 0;
+                    dataSource = 'CLF';
+
+                    // Batch Lookup (CLF Priority)
+                    if (clf.batch || clf['批次']) {
+                        dynamicBatch = clf.batch || clf['批次'];
+                    }
+
+                    // Client PO Lookup (CLF Priority)
+                    if (clf.client_po || clf['PO']) {
+                        dynamicClientPO = clf.client_po || clf['PO'];
+                    }
+                }
+
+                // 2. Master Data Fallback
+                if (master) {
+                    // Fallback for Scale if CLF is 0 or missing
+                    if (!scale && master.production_scale) {
+                        scale = master.production_scale;
+                        // Optional: Update source to indicate a mix? Or keep as CLF/Master based on priority?
+                        // If we didn't have CLF at all, dataSource is 'None'.
+                        // If we had CLF but scale was 0, dataSource is 'CLF'. 
+                        // Let's explicitly mark it as 'Master' if we are taking the scale from Master, 
+                        // OR we leave it as 'CLF' because the record match was via CLF.
+                        // User request: "production scale on the labe is gone".
+                        // Logic: If we take scale from Master, it's effectively Master data for that field.
+                    }
+
+                    // Fallback for Scale/Source if no CLF at all (Original Logic)
+                    if (dataSource === 'None') {
+                        scale = master.production_scale || 0;
+                        dataSource = 'Master';
+                    }
+
+                    // Fallback for Client PO (if still empty)
+                    if (!dynamicClientPO && master.client_po) {
+                        dynamicClientPO = master.client_po;
+                    }
+                }
+
+                // Parse Recipient from Batch Line Break (e.g., "CLF-25023\nJohn")
+                let dynamicRecipient = '';
+                if (dynamicBatch && dynamicBatch.includes('\n')) {
+                    const parts = dynamicBatch.split('\n');
+                    if (parts.length > 1 && parts[1].trim()) {
+                        dynamicRecipient = parts[1].trim();
+                    }
+                }
+
                 this.draft.push({
                     stockId: item.id,
                     po: item.po,
                     client: item.client,
                     product: item.product,
-                    itemNo: item.item_no || item.itemNo, // handle snake/camel
-                    batch: item.batch,
-                    recipient: '',
+                    itemNo: item.item_no || item.itemNo,
+                    batch: dynamicBatch,
+                    recipient: dynamicRecipient,
                     courier: 'SF',
                     tracking: '',
                     qty: 1, // Default to 1 to send
-                    maxQty: item.current_qty || item.currentQty || 0, // Store max available
+                    maxQty: item.current_qty || item.currentQty || 0,
                     size: item.size || '',
+                    scale: scale,
+                    source: dataSource,
+                    clientPO: dynamicClientPO,
                     note: ''
                 });
             });
